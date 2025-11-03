@@ -1,0 +1,20 @@
+# Cron job configuration for Daily Question Bank Pipeline
+# Run daily at 6:00 AM IST (adjust as needed)
+
+# Usage:
+# 1. Make script executable: chmod +x scripts/setup_cron.sh
+# 2. Run setup: ./scripts/setup_cron.sh
+# 3. Or manually add to crontab:
+#    crontab -e
+#    Add: 0 6 * * * cd /path/to/project && /usr/bin/python3 scripts/run_daily_pipeline.py >> logs/cron.log 2>&1
+
+# Example crontab entry:
+# 0 6 * * * cd /Users/techmarbles/Documents/DailyQuestionBank-automation && /usr/bin/python3 scripts/run_daily_pipeline.py >> logs/cron.log 2>&1
+
+# To view cron logs:
+# tail -f logs/cron.log
+
+# To remove cron job:
+# crontab -e
+# (Remove the line containing run_daily_pipeline.py)
+
