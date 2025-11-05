@@ -1,11 +1,13 @@
 """RSS feed fetcher module"""
 
 import feedparser
-import requests
+import asyncio
 from typing import List, Dict, Optional
 from datetime import datetime
-import time
 import logging
+import aiohttp
+
+from src.fetchers.html_scraper import HTMLScraper
 
 logger = logging.getLogger(__name__)
 
@@ -25,77 +27,91 @@ class RSSFetcher:
         self.timeout = timeout
         self.retry_attempts = retry_attempts
         self.retry_delay = retry_delay
+        self.html_scraper = HTMLScraper(timeout, retry_attempts, retry_delay)
 
-    def fetch_feed(self, feed_url: str) -> Optional[feedparser.FeedParserDict]:
+    async def close_sessions(self):
+        """Close any open sessions."""
+        await self.html_scraper.close_session()
+
+    async def fetch_feed(self, session: aiohttp.ClientSession, feed_url: str) -> Optional[str]:
         """
-        Fetch and parse RSS feed
+        Fetch RSS feed content asynchronously.
         
         Args:
-            feed_url: URL of the RSS feed
+            session: The aiohttp client session.
+            feed_url: URL of the RSS feed.
             
         Returns:
-            Parsed feed object or None on failure
+            Feed content as a string or None on failure.
         """
         for attempt in range(self.retry_attempts):
             try:
                 logger.info(f"Fetching RSS feed: {feed_url} (attempt {attempt + 1})")
-                feed = feedparser.parse(feed_url)
-                
-                if feed.bozo and feed.bozo_exception:
-                    logger.warning(f"Feed parsing warning: {feed.bozo_exception}")
-                
-                if feed.entries:
-                    logger.info(f"Successfully fetched {len(feed.entries)} entries from {feed_url}")
-                    return feed
-                else:
-                    logger.warning(f"No entries found in feed: {feed_url}")
-                    return None
-                    
-            except Exception as e:
+                async with session.get(feed_url, timeout=self.timeout) as response:
+                    response.raise_for_status()
+                    return await response.text()
+            except aiohttp.ClientError as e:
                 logger.error(f"Error fetching feed {feed_url} (attempt {attempt + 1}): {str(e)}")
                 if attempt < self.retry_attempts - 1:
-                    time.sleep(self.retry_delay)
+                    await asyncio.sleep(self.retry_delay)
                 else:
                     return None
-        
         return None
 
-    def extract_articles(self, feed: feedparser.FeedParserDict, source: str) -> List[Dict]:
+    async def extract_articles(self, feed_content: str, source: str, feed_url: str) -> List[Dict]:
         """
-        Extract article information from parsed feed
+        Extract article information from parsed feed content.
         
         Args:
-            feed: Parsed feed object
-            source: Source name (e.g., "The Hindu", "Indian Express")
+            feed_content: The RSS feed content as a string.
+            source: Source name (e.g., "The Hindu", "Indian Express").
+            feed_url: The URL of the feed for logging.
             
         Returns:
             List of article dictionaries with url, title, published_date, etc.
         """
-        articles = []
+        feed = feedparser.parse(feed_content)
+
+        if feed.bozo:
+            logger.warning(f"Feed parsing warning for {feed_url}: {feed.bozo_exception}")
         
+        if not feed.entries:
+            logger.warning(f"No entries found in feed: {feed_url}")
+            return []
+
+        tasks = []
         for entry in feed.entries:
-            try:
-                article = {
-                    'url': entry.get('link', ''),
-                    'title': entry.get('title', ''),
-                    'published_date': self._parse_date(entry.get('published', '')),
+            article_url = entry.get('link')
+            if article_url:
+                tasks.append(self._process_entry(entry, source))
+
+        articles = await asyncio.gather(*tasks)
+        return [article for article in articles if article]
+
+    async def _process_entry(self, entry: Dict, source: str) -> Optional[Dict]:
+        """Process a single feed entry to extract and scrape article content."""
+        article_url = entry.get('link')
+        try:
+            scraped_data = await self.html_scraper.scrape_article(article_url, source)
+
+            if scraped_data and scraped_data.get('content'):
+                return {
+                    'url': article_url,
+                    'title': scraped_data.get('title') or entry.get('title', ''),
+                    'published_date': self._parse_date(entry.get('published')),
                     'source': source,
                     'description': entry.get('description', ''),
-                    'summary': entry.get('summary', '')
+                    'summary': entry.get('summary', ''),
+                    'content': scraped_data['content']
                 }
-                
-                if article['url']:
-                    articles.append(article)
-                else:
-                    logger.warning(f"Skipping article with no URL: {entry.get('title', 'Unknown')}")
-                    
-            except Exception as e:
-                logger.error(f"Error extracting article from feed: {str(e)}")
-                continue
-        
-        return articles
+            else:
+                logger.warning(f"Could not scrape content for: {article_url}")
+                return None
+        except Exception as e:
+            logger.error(f"Error processing entry {article_url}: {str(e)}")
+            return None
 
-    def _parse_date(self, date_str: str) -> Optional[str]:
+    def _parse_date(self, date_str: Optional[str]) -> Optional[str]:
         """
         Parse date string to YYYY-MM-DD format
         
@@ -118,47 +134,52 @@ class RSSFetcher:
             logger.warning(f"Error parsing date '{date_str}': {str(e)}")
             return None
 
-    def fetch_multiple_feeds(self, feed_urls: List[str], source: str) -> List[Dict]:
+    async def fetch_multiple_feeds(self, feed_urls: List[str], source: str) -> List[Dict]:
         """
-        Fetch articles from multiple RSS feeds
+        Fetch articles from multiple RSS feeds asynchronously.
         
         Args:
-            feed_urls: List of RSS feed URLs
-            source: Source name for all feeds
+            feed_urls: List of RSS feed URLs.
+            source: Source name for all feeds.
             
         Returns:
-            Combined list of articles from all feeds
+            Combined list of articles from all feeds.
         """
-        all_articles = []
-        
-        for feed_url in feed_urls:
-            feed = self.fetch_feed(feed_url)
-            if feed:
-                articles = self.extract_articles(feed, source)
-                all_articles.extend(articles)
-                # Small delay between feeds to avoid rate limiting
-                time.sleep(1)
-        
+        async with aiohttp.ClientSession() as session:
+            tasks = []
+            for feed_url in feed_urls:
+                tasks.append(self._fetch_and_extract(session, feed_url, source))
+
+            results = await asyncio.gather(*tasks)
+            all_articles = [article for articles in results for article in articles]
+
         logger.info(f"Total articles fetched from {source}: {len(all_articles)}")
         return all_articles
 
-    def get_today_articles(self, feed_urls: List[str], source: str) -> List[Dict]:
+    async def _fetch_and_extract(self, session: aiohttp.ClientSession, feed_url: str, source: str) -> List[Dict]:
+        """Fetch a single feed and extract articles."""
+        feed_content = await self.fetch_feed(session, feed_url)
+        if feed_content:
+            return await self.extract_articles(feed_content, source, feed_url)
+        return []
+
+    async def get_today_articles(self, feed_urls: List[str], source: str) -> List[Dict]:
         """
-        Fetch and filter articles from today
+        Fetch and filter articles from today asynchronously.
         
         Args:
-            feed_urls: List of RSS feed URLs
-            source: Source name
+            feed_urls: List of RSS feed URLs.
+            source: Source name.
             
         Returns:
-            List of articles published today
+            List of articles published today.
         """
-        all_articles = self.fetch_multiple_feeds(feed_urls, source)
+        all_articles = await self.fetch_multiple_feeds(feed_urls, source)
         today = datetime.now().strftime('%Y-%m-%d')
         
         today_articles = [
             article for article in all_articles
-            if article.get('published_date') == today
+            if article and article.get('published_date') == today
         ]
         
         logger.info(f"Articles from today ({today}) for {source}: {len(today_articles)}")
