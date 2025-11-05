@@ -1,10 +1,10 @@
 """HTML scraper module using BeautifulSoup"""
 
-import requests
+import aiohttp
 from bs4 import BeautifulSoup
 from typing import Optional, Dict
 import logging
-import time
+import asyncio
 from urllib.parse import urljoin, urlparse
 
 logger = logging.getLogger(__name__)
@@ -28,36 +28,47 @@ class HTMLScraper:
         self.headers = {
             'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'
         }
+        self.session: Optional[aiohttp.ClientSession] = None
 
-    def fetch_page(self, url: str) -> Optional[requests.Response]:
+    async def _get_session(self) -> aiohttp.ClientSession:
+        """Get or create an aiohttp ClientSession"""
+        if self.session is None or self.session.closed:
+            self.session = aiohttp.ClientSession(headers=self.headers)
+        return self.session
+
+    async def close_session(self):
+        """Close the aiohttp ClientSession"""
+        if self.session and not self.session.closed:
+            await self.session.close()
+
+    async def fetch_page(self, url: str) -> Optional[str]:
         """
-        Fetch HTML page content
+        Fetch HTML page content asynchronously
         
         Args:
             url: URL to fetch
             
         Returns:
-            Response object or None on failure
+            HTML content as string or None on failure
         """
+        session = await self._get_session()
         for attempt in range(self.retry_attempts):
             try:
                 logger.info(f"Fetching HTML page: {url} (attempt {attempt + 1})")
-                response = requests.get(url, headers=self.headers, timeout=self.timeout)
-                response.raise_for_status()
-                return response
-                
-            except requests.exceptions.RequestException as e:
+                async with session.get(url, timeout=self.timeout) as response:
+                    response.raise_for_status()
+                    return await response.text()
+            except aiohttp.ClientError as e:
                 logger.error(f"Error fetching {url} (attempt {attempt + 1}): {str(e)}")
                 if attempt < self.retry_attempts - 1:
-                    time.sleep(self.retry_delay)
+                    await asyncio.sleep(self.retry_delay)
                 else:
                     return None
-        
         return None
 
-    def scrape_article(self, url: str, source: str = None) -> Optional[Dict]:
+    async def scrape_article(self, url: str, source: str = None) -> Optional[Dict]:
         """
-        Scrape article content from URL
+        Scrape article content from URL asynchronously
         
         Args:
             url: Article URL
@@ -66,12 +77,12 @@ class HTMLScraper:
         Returns:
             Dictionary with title, content, and metadata, or None on failure
         """
-        response = self.fetch_page(url)
-        if not response:
+        html_content = await self.fetch_page(url)
+        if not html_content:
             return None
         
         try:
-            soup = BeautifulSoup(response.content, 'lxml')
+            soup = BeautifulSoup(html_content, 'lxml')
             
             # Determine source if not provided
             if not source:
@@ -90,6 +101,27 @@ class HTMLScraper:
             logger.error(f"Error parsing HTML from {url}: {str(e)}")
             return None
 
+    def _clean_article_body(self, article_body: BeautifulSoup):
+        """Clean article body by removing common irrelevant elements."""
+        if not article_body:
+            return
+
+        # Remove common unwanted tags
+        for tag in article_body.find_all(['script', 'style', 'aside', 'nav', 'footer', 'header', 'form', 'iframe']):
+            tag.decompose()
+
+        # Remove elements by class or ID (ads, social buttons, etc.)
+        for selector in [
+            "[class*='ad']", "[id*='ad']",
+            "[class*='social']", "[id*='social']",
+            "[class*='comment']", "[id*='comment']",
+            "[class*='sidebar']", "[id*='sidebar']",
+            "[class*='recommend']", "[id*='recommend']",
+            "[class*='related']", "[id*='related']"
+        ]:
+            for element in article_body.select(selector):
+                element.decompose()
+
     def _detect_source(self, url: str, soup: BeautifulSoup) -> str:
         """Detect source from URL or page content"""
         if 'thehindu.com' in url.lower():
@@ -102,21 +134,15 @@ class HTMLScraper:
     def _scrape_the_hindu(self, soup: BeautifulSoup, url: str) -> Optional[Dict]:
         """Scrape The Hindu article"""
         try:
-            # The Hindu article structure
             title_elem = soup.find('h1', class_='title') or soup.find('h1', itemprop='headline')
-            title = title_elem.get_text(strip=True) if title_elem else ""
+            title = title_elem.get_text(strip=True) if title_elem else "Untitled"
             
-            # Find article body
             article_body = soup.find('div', class_='article-body') or soup.find('div', itemprop='articleBody')
-            
             if not article_body:
-                # Try alternative selectors
                 article_body = soup.find('div', class_='article-content') or soup.find('article')
             
             if article_body:
-                # Remove script and style elements
-                for script in article_body(["script", "style", "aside", "nav", "footer", "header"]):
-                    script.decompose()
+                self._clean_article_body(article_body)
                 
                 # Get text content
                 paragraphs = article_body.find_all('p')
@@ -139,24 +165,16 @@ class HTMLScraper:
     def _scrape_indian_express(self, soup: BeautifulSoup, url: str) -> Optional[Dict]:
         """Scrape Indian Express article"""
         try:
-            # Indian Express article structure
             title_elem = soup.find('h1', class_='entry-title') or soup.find('h1', itemprop='headline')
-            title = title_elem.get_text(strip=True) if title_elem else ""
+            title = title_elem.get_text(strip=True) if title_elem else "Untitled"
             
-            # Find article body
             article_body = soup.find('div', class_='entry-content') or soup.find('div', itemprop='articleBody')
-            
             if not article_body:
                 article_body = soup.find('div', class_='article-content') or soup.find('article')
             
             if article_body:
-                # Remove unwanted elements
-                for script in article_body(["script", "style", "aside", "nav", "footer", "header", "div"]):
-                    # Only remove divs with specific classes (ads, etc.)
-                    if script.get('class') and any('ad' in str(c).lower() for c in script.get('class', [])):
-                        script.decompose()
+                self._clean_article_body(article_body)
                 
-                # Get text content
                 paragraphs = article_body.find_all('p')
                 content = '\n\n'.join([p.get_text(strip=True) for p in paragraphs if p.get_text(strip=True)])
                 
@@ -177,29 +195,25 @@ class HTMLScraper:
     def _scrape_generic(self, soup: BeautifulSoup, url: str, source: str) -> Optional[Dict]:
         """Generic article scraping fallback"""
         try:
-            # Try common article selectors
             title_elem = (soup.find('h1') or 
                          soup.find('title') or 
                          soup.find('meta', property='og:title'))
             
             if title_elem:
                 if title_elem.name == 'meta':
-                    title = title_elem.get('content', '')
+                    title = title_elem.get('content', '') or "Untitled"
                 else:
-                    title = title_elem.get_text(strip=True)
+                    title = title_elem.get_text(strip=True) or "Untitled"
             else:
-                title = ""
+                title = "Untitled"
             
-            # Try to find main content
             article_body = (soup.find('article') or 
                           soup.find('div', class_='article') or
                           soup.find('div', class_='content') or
                           soup.find('main'))
             
             if article_body:
-                # Remove unwanted elements
-                for script in article_body(["script", "style", "aside", "nav", "footer", "header"]):
-                    script.decompose()
+                self._clean_article_body(article_body)
                 
                 paragraphs = article_body.find_all('p')
                 content = '\n\n'.join([p.get_text(strip=True) for p in paragraphs if p.get_text(strip=True)])

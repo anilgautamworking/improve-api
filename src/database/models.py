@@ -72,3 +72,24 @@ class MetadataSummary(Base):
     def __repr__(self):
         return f"<MetadataSummary(date={self.date}, questions={self.questions_generated}, processed={self.articles_processed})>"
 
+
+class Article(Base):
+    """Stores scraped and cleaned article content"""
+    __tablename__ = "articles"
+
+    id = Column(Integer, primary_key=True, index=True)
+    url = Column(String(500), nullable=False, unique=True, index=True)
+    title = Column(String(500), nullable=False)
+    content = Column(Text, nullable=False)
+    source = Column(String(100), nullable=False, index=True)
+    category = Column(String(100), nullable=True, index=True)
+    published_date = Column(String(10), nullable=True, index=True)
+    created_at = Column(DateTime(timezone=True), server_default=func.now(), nullable=False)
+    updated_at = Column(DateTime(timezone=True), onupdate=func.now())
+
+    __table_args__ = (
+        Index('idx_source_category_date', 'source', 'category', 'published_date'),
+    )
+
+    def __repr__(self):
+        return f"<Article(id={self.id}, title={self.title[:50]}...)>"
