@@ -1,42 +1,45 @@
 """MCQ generation prompts"""
 
-# System prompt for question generation
-SYSTEM_PROMPT = """You are an expert question generator for competitive examinations like UPSC, SSC, and Banking exams.
+# System prompt for question generation - Modern Competitive Exam Style
+SYSTEM_PROMPT = """You are an expert question generator for competitive exams (UPSC/SSC/Banking). Generate high-quality, modern MCQs.
 
-Your task is to transform news articles and documents into high-quality, factual multiple-choice questions (MCQs).
-
-Guidelines:
-1. Generate 5-15 MCQs per article (depending on content length and relevance)
-2. Questions should be factual, clear, and concept-oriented
-3. Focus on: Economy, Budget, Finance, Banking, Trade, Policy, Government Schemes, Reforms, Regulatory Changes
-4. Each question must have exactly 4 options (A, B, C, D)
-5. Provide a brief explanation (1-2 lines) for the correct answer
-6. Avoid repetitive questions
-7. Ensure questions are answerable from the provided content only
-8. Use neutral, objective tone
-9. Prefer conceptual framing over pure factual recall
-10. Do not hallucinate facts beyond the provided content
-
-Output format: Strict JSON only (no markdown, no commentary)
+CRITICAL REQUIREMENTS:
+1. Questions must be SELF-CONTAINED - the question and options should be enough to answer without the article context
+2. Generate CONCEPTUAL questions, not just factual recall
+3. Use modern question formats:
+   - "Which of the following statements is/are correct?"
+   - "Which of the following best describes..."
+   - "What is the most likely implication of..."
+   - "Which option most accurately explains..."
+4. Options should be COMPLETE STATEMENTS (not just single words/phrases)
+5. Questions should test UNDERSTANDING and APPLICATION, not just memory
+6. Focus on: Economic concepts, Policy implications, Cause-effect relationships, Comparative analysis
+7. Each question: 4 options (A-D), clear answer, brief explanation
+8. Answer format: single letter only (A, B, C, or D)
+9. Output: Strict JSON only (no markdown)
 """
 
-# User prompt template
-USER_PROMPT_TEMPLATE = """Analyze the following article and generate exam-oriented multiple-choice questions.
-
-Article Source: {source}
-Category: {category}
-Date: {date}
+# User prompt template - Focus on quality, self-contained questions
+USER_PROMPT_TEMPLATE = """Article Context: {source} | Category: {category} | Date: {date}
 
 Article Content:
 {content}
 
-Generate 5-15 multiple-choice questions based on this content. Focus on:
-- Key concepts, policies, and reforms mentioned
-- Important data, statistics, and figures
-- Government schemes and initiatives
-- Economic and financial implications
+Generate 3-5 HIGH-QUALITY MCQ questions that are:
+1. SELF-CONTAINED: Question and options provide all necessary context
+2. CONCEPTUAL: Test understanding, not just factual recall
+3. MODERN FORMAT: Use statement-based questions like:
+   - "Which of the following statements is/are correct regarding..."
+   - "What is the most significant implication of..."
+   - "Which of the following best explains the relationship between..."
+   - "Consider the following statements about..."
 
-Return the output as strict JSON in this format:
+4. COMPLETE OPTIONS: Each option should be a full statement (not fragments)
+5. EXAM-RELEVANT: Focus on concepts useful for competitive exams
+
+Focus areas: Economic implications, Policy analysis, Cause-effect relationships, Comparative understanding, Conceptual clarity.
+
+JSON format:
 {{
   "source": "{source}",
   "category": "{category}",
@@ -44,18 +47,20 @@ Return the output as strict JSON in this format:
   "total_questions": <number>,
   "questions": [
     {{
-      "question": "<MCQ question text>",
-      "options": ["A. ...", "B. ...", "C. ...", "D. ..."],
-      "answer": "<Correct option letter>",
-      "explanation": "<Short factual reasoning>"
+      "question": "<Complete self-contained question text>",
+      "options": [
+        "A. <Complete statement option 1>",
+        "B. <Complete statement option 2>",
+        "C. <Complete statement option 3>",
+        "D. <Complete statement option 4>"
+      ],
+      "answer": "<A/B/C/D only>",
+      "explanation": "<Brief explanation of why the answer is correct>"
     }}
   ]
 }}
 
-If the content is not relevant for exam preparation (e.g., sports, entertainment, local news without policy implications), return:
-{{
-  "status": "No relevant content"
-}}
+If not relevant: {{"status": "No relevant content"}}
 """
 
 

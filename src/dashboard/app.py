@@ -1,5 +1,13 @@
 """Flask admin dashboard"""
 
+import sys
+import os
+
+# Add project root to Python path
+project_root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+if project_root not in sys.path:
+    sys.path.insert(0, project_root)
+
 from flask import Flask, render_template, jsonify, request
 from datetime import datetime, timedelta
 from src.database.repositories.question_repository import QuestionRepository

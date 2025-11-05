@@ -46,7 +46,7 @@
 3. **Test Pipeline** (after adding API key):
    ```bash
    source venv/bin/activate
-   python scripts/run_daily_pipeline.py
+   python3 scripts/run_daily_pipeline.py
    ```
 
 ## 🔧 Useful Commands:
@@ -69,7 +69,7 @@ docker-compose up -d
 
 # Or manually:
 source venv/bin/activate
-python src/dashboard/app.py
+python3 src/dashboard/app.py
 ```
 
 ## 📊 Dashboard URL:

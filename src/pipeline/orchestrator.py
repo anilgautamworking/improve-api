@@ -9,6 +9,7 @@ from src.fetchers.pdf_parser import PDFParser
 from src.generators.question_generator import QuestionGenerator
 from src.utils.filters import is_relevant_content, classify_category, filter_by_source
 from src.utils.content_cleaner import clean_text
+from src.utils.article_scorer import ArticleScorer
 import os
 
 logger = logging.getLogger(__name__)
@@ -42,15 +43,25 @@ class PipelineOrchestrator:
 
     def process_rss_feeds(self, feed_configs: List[Dict]) -> List[Dict]:
         """
-        Process RSS feeds and generate questions
+        Process RSS feeds and generate questions with daily limits per category
         
         Args:
             feed_configs: List of feed configurations with 'urls', 'source', and optional 'category'
             
         Returns:
-            List of generated question batches
+            List of curated question batches (limited per category)
         """
+        from src.config.settings import settings
+        from src.database.repositories.question_repository import QuestionRepository
+        from datetime import datetime
+        
         all_question_batches = []
+        category_question_counts = {}  # Track questions per category
+        category_articles_processed = {}  # Track articles processed per category
+        
+        # Get today's date
+        today = datetime.now().strftime('%Y-%m-%d')
+        question_repo = QuestionRepository()
         
         for config in feed_configs:
             source = config.get('source', 'Unknown')
@@ -61,28 +72,90 @@ class PipelineOrchestrator:
                 logger.warning(f"Skipping unsupported source: {source}")
                 continue
             
+            # Initialize category tracking
+            if category not in category_question_counts:
+                category_question_counts[category] = 0
+                category_articles_processed[category] = 0
+                
+                # Check existing questions for this category today
+                existing_questions = question_repo.get_questions_by_category(category, limit=100)
+                today_existing = [q for q in existing_questions if q.date == today]
+                category_question_counts[category] = sum(q.total_questions for q in today_existing)
+                logger.info(f"Category '{category}' already has {category_question_counts[category]} questions today")
+            
+            # Check if we've reached the daily limit for this category
+            if category_question_counts[category] >= settings.QUESTIONS_PER_CATEGORY_PER_DAY:
+                logger.info(f"Category '{category}' has reached daily limit ({settings.QUESTIONS_PER_CATEGORY_PER_DAY} questions). Skipping.")
+                continue
+            
             try:
-                logger.info(f"Processing RSS feeds for {source}")
+                logger.info(f"Processing RSS feeds for {source} - Category: {category}")
                 self.stats['feeds_processed'] += 1
                 
-                # Fetch articles
+                # Fetch ALL articles from today
                 articles = self.rss_fetcher.get_today_articles(feed_urls, source)
                 self.stats['articles_fetched'] += len(articles)
                 
-                # Process each article
-                for article in articles:
+                logger.info(f"Evaluating {len(articles)} articles for category '{category}'...")
+                
+                # Score and rank ALL articles to find the best ones
+                ranked_articles = ArticleScorer.rank_articles(
+                    articles, 
+                    target_category=category,
+                    top_n=settings.MAX_ARTICLES_PER_CATEGORY
+                )
+                
+                articles_to_process = ranked_articles
+                score_list = [f"{a['score']:.1f}" for a in articles_to_process]
+                logger.info(f"Selected top {len(articles_to_process)} articles for category '{category}' "
+                           f"(scores: {score_list})")
+                
+                # Process articles until we reach daily limit
+                for article in articles_to_process:
+                    # Check if we've reached daily limit
+                    if category_question_counts[category] >= settings.QUESTIONS_PER_CATEGORY_PER_DAY:
+                        logger.info(f"Reached daily limit for category '{category}'. Stopping article processing.")
+                        break
+                    
+                    # Check article limit
+                    if category_articles_processed[category] >= settings.MAX_ARTICLES_PER_CATEGORY:
+                        logger.info(f"Reached article limit for category '{category}'. Stopping.")
+                        break
+                    
                     try:
+                        # Remove score from article dict before processing
+                        article_for_processing = {k: v for k, v in article.items() if k != 'score'}
+                        
                         result = self.process_article(
-                            url=article['url'],
-                            title=article.get('title', ''),
+                            url=article_for_processing['url'],
+                            title=article_for_processing.get('title', ''),
                             source=source,
                             category=category
                         )
                         
                         if result:
+                            questions_count = result.get('total_questions', 0)
+                            
+                            # Check if adding these questions would exceed limit
+                            if category_question_counts[category] + questions_count > settings.QUESTIONS_PER_CATEGORY_PER_DAY:
+                                # Trim questions to fit limit
+                                remaining_slots = settings.QUESTIONS_PER_CATEGORY_PER_DAY - category_question_counts[category]
+                                if remaining_slots > 0:
+                                    result['questions'] = result['questions'][:remaining_slots]
+                                    result['total_questions'] = remaining_slots
+                                    questions_count = remaining_slots
+                                    logger.info(f"Trimmed questions to fit daily limit for '{category}'")
+                                else:
+                                    logger.info(f"Daily limit reached for '{category}'. Skipping remaining questions.")
+                                    break
+                            
                             all_question_batches.append(result)
+                            category_question_counts[category] += questions_count
+                            category_articles_processed[category] += 1
                             self.stats['articles_processed'] += 1
-                            self.stats['questions_generated'] += result.get('total_questions', 0)
+                            self.stats['questions_generated'] += questions_count
+                            
+                            logger.info(f"Category '{category}': {category_question_counts[category]}/{settings.QUESTIONS_PER_CATEGORY_PER_DAY} questions")
                         else:
                             self.stats['articles_skipped'] += 1
                             
@@ -94,6 +167,13 @@ class PipelineOrchestrator:
             except Exception as e:
                 logger.error(f"Error processing RSS feeds for {source}: {str(e)}")
                 self.stats['errors'].append(str(e))
+        
+        # Log summary per category
+        logger.info("=" * 80)
+        logger.info("Questions Generated by Category:")
+        for category, count in category_question_counts.items():
+            logger.info(f"  {category}: {count} questions")
+        logger.info("=" * 80)
         
         return all_question_batches
 

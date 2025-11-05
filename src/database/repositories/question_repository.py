@@ -60,6 +60,10 @@ class QuestionRepository:
             finally:
                 if should_close:
                     session.close()
+                    
+        except Exception as e:
+            logger.error(f"Error saving questions: {str(e)}")
+            return None
 
     def get_questions_by_date(self, date: str) -> List[DailyQuestion]:
         """

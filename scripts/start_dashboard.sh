@@ -10,6 +10,8 @@ echo ""
 echo "Press Ctrl+C to stop the server"
 echo ""
 
+# Add project root to Python path
+export PYTHONPATH="${PYTHONPATH}:$(pwd)"
 python src/dashboard/app.py
 
 

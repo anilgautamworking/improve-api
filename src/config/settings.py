@@ -1,9 +1,12 @@
 """Configuration management"""
 
 import os
+import logging
 from dotenv import load_dotenv
 
 load_dotenv()
+
+logger = logging.getLogger(__name__)
 
 
 class Settings:
@@ -15,11 +18,19 @@ class Settings:
         "postgresql://postgres:postgres@localhost:5432/daily_question_bank"
     )
 
-    # OpenAI
+    # AI Provider Selection
+    AI_PROVIDER = os.getenv("AI_PROVIDER", "openai").lower()  # "openai" or "ollama"
+
+    # OpenAI Configuration
     OPENAI_API_KEY = os.getenv("OPENAI_API_KEY", "")
     OPENAI_MODEL = os.getenv("OPENAI_MODEL", "gpt-4")
     OPENAI_TEMPERATURE = float(os.getenv("OPENAI_TEMPERATURE", "0.7"))
-    OPENAI_MAX_TOKENS = int(os.getenv("OPENAI_MAX_TOKENS", "2000"))
+    OPENAI_MAX_TOKENS = int(os.getenv("OPENAI_MAX_TOKENS", "1500"))
+
+    # Ollama Configuration
+    OLLAMA_BASE_URL = os.getenv("OLLAMA_BASE_URL", "http://localhost:11434")
+    OLLAMA_MODEL = os.getenv("OLLAMA_MODEL", "llama3.1:8b")
+    OLLAMA_TEMPERATURE = float(os.getenv("OLLAMA_TEMPERATURE", "0.7"))
 
     # Logging
     LOG_LEVEL = os.getenv("LOG_LEVEL", "INFO")
@@ -45,8 +56,16 @@ class Settings:
 
     # Processing Configuration
     MAX_ARTICLES_PER_RUN = int(os.getenv("MAX_ARTICLES_PER_RUN", "50"))
-    QUESTION_COUNT_MIN = int(os.getenv("QUESTION_COUNT_MIN", "5"))
-    QUESTION_COUNT_MAX = int(os.getenv("QUESTION_COUNT_MAX", "15"))
+    MAX_ARTICLES_PER_CATEGORY = int(
+        os.getenv("MAX_ARTICLES_PER_CATEGORY", "5")
+    )  # Limit articles per category
+    QUESTIONS_PER_CATEGORY_PER_DAY = int(
+        os.getenv("QUESTIONS_PER_CATEGORY_PER_DAY", "12")
+    )  # Target questions per category
+    QUESTION_COUNT_MIN = int(os.getenv("QUESTION_COUNT_MIN", "3"))
+    QUESTION_COUNT_MAX = int(
+        os.getenv("QUESTION_COUNT_MAX", "5")
+    )  # Reduced per article
     RETRY_ATTEMPTS = int(os.getenv("RETRY_ATTEMPTS", "3"))
     RETRY_DELAY = int(os.getenv("RETRY_DELAY", "5"))
 
@@ -88,8 +107,32 @@ class Settings:
     @classmethod
     def validate(cls) -> bool:
         """Validate required settings"""
-        if not cls.OPENAI_API_KEY:
-            raise ValueError("OPENAI_API_KEY is required")
+        if cls.AI_PROVIDER == "openai":
+            if not cls.OPENAI_API_KEY:
+                raise ValueError("OPENAI_API_KEY is required when AI_PROVIDER=openai")
+        elif cls.AI_PROVIDER == "ollama":
+            # Ollama doesn't require API key, but we'll check if it's running
+            # Note: This is a soft check - actual connection will be verified when client is created
+            try:
+                import requests
+
+                response = requests.get(f"{cls.OLLAMA_BASE_URL}/api/tags", timeout=2)
+                if response.status_code != 200:
+                    logger.warning(
+                        f"Ollama may not be running at {cls.OLLAMA_BASE_URL}. Start with: ollama serve"
+                    )
+            except ImportError:
+                pass  # requests might not be available during validation
+            except Exception as e:
+                logger.warning(
+                    f"Cannot connect to Ollama at {cls.OLLAMA_BASE_URL}: {str(e)}. Will retry during initialization."
+                )
+                # Don't fail validation - let the client handle it
+        else:
+            raise ValueError(
+                f"Invalid AI_PROVIDER: {cls.AI_PROVIDER}. Must be 'openai' or 'ollama'"
+            )
+
         if not cls.DATABASE_URL:
             raise ValueError("DATABASE_URL is required")
         return True

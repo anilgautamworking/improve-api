@@ -2,9 +2,11 @@
 
 import json
 import logging
-from typing import Optional, Dict, List
+import os
+from typing import Optional, Dict, List, Union
 from datetime import datetime
 from src.ai.openai_client import OpenAIClient
+from src.ai.ollama_client import OllamaClient
 from src.generators.mcq_prompts import SYSTEM_PROMPT, build_prompt
 from src.utils.content_cleaner import clean_text, extract_relevant_sections
 
@@ -12,18 +14,45 @@ logger = logging.getLogger(__name__)
 
 
 class QuestionGenerator:
-    """Generates MCQs from article content using OpenAI"""
+    """Generates MCQs from article content using OpenAI or Ollama"""
 
-    def __init__(self, openai_client: Optional[OpenAIClient] = None):
+    def __init__(self, client: Optional[Union[OpenAIClient, OllamaClient]] = None):
         """
         Initialize question generator
         
         Args:
-            openai_client: OpenAI client instance (creates new if None)
+            client: AI client instance (OpenAI or Ollama, creates new if None)
+                   If None, uses AI_PROVIDER from settings to determine which to use
         """
-        self.openai_client = openai_client or OpenAIClient()
-        self.min_questions = 5
-        self.max_questions = 15
+        from src.config.settings import settings
+        
+        if client:
+            self.client = client
+        elif settings.AI_PROVIDER == "ollama":
+            try:
+                self.client = OllamaClient(
+                    base_url=settings.OLLAMA_BASE_URL,
+                    model=settings.OLLAMA_MODEL,
+                    temperature=settings.OLLAMA_TEMPERATURE
+                )
+                logger.info(f"Using Ollama with model: {settings.OLLAMA_MODEL}")
+            except Exception as e:
+                logger.error(f"Failed to initialize Ollama: {e}")
+                raise ValueError(
+                    f"Cannot initialize Ollama. Check that Ollama is running and model '{settings.OLLAMA_MODEL}' is available. "
+                    f"Start Ollama with: ollama serve, then pull model: ollama pull {settings.OLLAMA_MODEL}"
+                )
+        else:  # Default to OpenAI
+            self.client = OpenAIClient(
+                model=settings.OPENAI_MODEL,
+                temperature=settings.OPENAI_TEMPERATURE,
+                max_tokens=settings.OPENAI_MAX_TOKENS
+            )
+            logger.info(f"Using OpenAI with model: {settings.OPENAI_MODEL}")
+        
+        self.min_questions = settings.QUESTION_COUNT_MIN
+        self.max_questions = settings.QUESTION_COUNT_MAX  # Per article
+        self.max_content_length = 2500  # Limit content to ~2500 chars to save tokens
 
     def generate_questions(self, source: str, category: str, content: str, 
                           date: Optional[str] = None) -> Optional[Dict]:
@@ -50,12 +79,17 @@ class QuestionGenerator:
             logger.warning(f"Insufficient content for question generation (source: {source})")
             return {"status": "No relevant content"}
         
+        # Truncate content to save tokens (keep first N characters)
+        if len(relevant_content) > self.max_content_length:
+            relevant_content = relevant_content[:self.max_content_length] + "... [Content truncated]"
+            logger.debug(f"Truncated content from {len(content)} to {len(relevant_content)} characters")
+        
         # Build prompt
         prompt = build_prompt(source, category, date, relevant_content)
         
-        # Generate questions via OpenAI
+        # Generate questions via AI client (OpenAI or Ollama)
         logger.info(f"Generating questions for {source} - {category}")
-        response_text = self.openai_client.generate_completion(
+        response_text = self.client.generate_completion(
             prompt=prompt,
             system_prompt=SYSTEM_PROMPT
         )
@@ -158,10 +192,19 @@ class QuestionGenerator:
                 logger.warning(f"Skipping question {i+1}: invalid options (must be list of 4)")
                 continue
             
-            # Validate answer
-            answer = q.get("answer", "").upper().strip()
+            # Validate answer - extract letter if format is "C. TEXT" or just "C"
+            answer_raw = q.get("answer", "").upper().strip()
+            # Extract first letter if answer contains option text (e.g., "C. WAYMO" -> "C")
+            if answer_raw.startswith(("A.", "B.", "C.", "D.")):
+                answer = answer_raw[0]
+            elif answer_raw.startswith(("A ", "B ", "C ", "D ")):
+                answer = answer_raw[0]
+            else:
+                # Try to extract just the letter
+                answer = answer_raw[0] if answer_raw and answer_raw[0] in ["A", "B", "C", "D"] else answer_raw
+            
             if answer not in ["A", "B", "C", "D"]:
-                logger.warning(f"Skipping question {i+1}: invalid answer '{answer}'")
+                logger.warning(f"Skipping question {i+1}: invalid answer '{answer_raw}' (extracted: '{answer}')")
                 continue
             
             # Normalize question
