@@ -21,6 +21,7 @@ class CrawlerOrchestrator:
             'articles_fetched': 0,
             'articles_stored': 0,
             'articles_skipped': 0,
+            'articles_failed': 0,
             'errors': []
         }
 
@@ -47,6 +48,7 @@ class CrawlerOrchestrator:
                         self.stats['articles_stored'] += 1
                     except Exception as e:
                         logger.error(f"Error storing article {article_data.get('url', 'Unknown')}: {str(e)}")
+                        self.stats['articles_failed'] += 1
                         self.stats['errors'].append(str(e))
 
             except Exception as e:

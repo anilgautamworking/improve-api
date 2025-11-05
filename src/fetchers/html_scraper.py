@@ -1,49 +1,49 @@
-"""HTML scraper module using BeautifulSoup"""
+"""HTML scraper module using Playwright and BeautifulSoup"""
 
-import aiohttp
+from playwright.async_api import async_playwright, Browser, Page
 from bs4 import BeautifulSoup
 from typing import Optional, Dict
 import logging
 import asyncio
-from urllib.parse import urljoin, urlparse
 
 logger = logging.getLogger(__name__)
 
 
 class HTMLScraper:
-    """Scrapes article content from HTML pages"""
+    """Scrapes article content from HTML pages using Playwright for dynamic content"""
 
-    def __init__(self, timeout: int = 30, retry_attempts: int = 3, retry_delay: int = 5):
+    def __init__(self, timeout: int = 45000, headless: bool = True):
         """
         Initialize HTML scraper
         
         Args:
-            timeout: Request timeout in seconds
-            retry_attempts: Number of retry attempts on failure
-            retry_delay: Delay between retries in seconds
+            timeout: Page load timeout in milliseconds (default 45 seconds)
+            headless: Run browser in headless mode
         """
         self.timeout = timeout
-        self.retry_attempts = retry_attempts
-        self.retry_delay = retry_delay
-        self.headers = {
-            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'
-        }
-        self.session: Optional[aiohttp.ClientSession] = None
+        self.headless = headless
+        self.browser: Optional[Browser] = None
+        self._playwright = None
 
-    async def _get_session(self) -> aiohttp.ClientSession:
-        """Get or create an aiohttp ClientSession"""
-        if self.session is None or self.session.closed:
-            self.session = aiohttp.ClientSession(headers=self.headers)
-        return self.session
+    async def _get_browser(self) -> Browser:
+        """Get or create a Playwright browser instance"""
+        if self.browser is None:
+            self._playwright = await async_playwright().start()
+            self.browser = await self._playwright.chromium.launch(headless=self.headless)
+        return self.browser
 
     async def close_session(self):
-        """Close the aiohttp ClientSession"""
-        if self.session and not self.session.closed:
-            await self.session.close()
+        """Close the browser and playwright instance"""
+        if self.browser:
+            await self.browser.close()
+            self.browser = None
+        if self._playwright:
+            await self._playwright.stop()
+            self._playwright = None
 
     async def fetch_page(self, url: str) -> Optional[str]:
         """
-        Fetch HTML page content asynchronously
+        Fetch HTML page content using Playwright
         
         Args:
             url: URL to fetch
@@ -51,24 +51,31 @@ class HTMLScraper:
         Returns:
             HTML content as string or None on failure
         """
-        session = await self._get_session()
-        for attempt in range(self.retry_attempts):
+        try:
+            browser = await self._get_browser()
+            page = await browser.new_page()
+            
             try:
-                logger.info(f"Fetching HTML page: {url} (attempt {attempt + 1})")
-                async with session.get(url, timeout=self.timeout) as response:
-                    response.raise_for_status()
-                    return await response.text()
-            except aiohttp.ClientError as e:
-                logger.error(f"Error fetching {url} (attempt {attempt + 1}): {str(e)}")
-                if attempt < self.retry_attempts - 1:
-                    await asyncio.sleep(self.retry_delay)
-                else:
-                    return None
-        return None
+                logger.info(f"Fetching HTML page: {url}")
+                # Use 'domcontentloaded' instead of 'networkidle' for faster loading
+                await page.goto(url, wait_until="domcontentloaded", timeout=self.timeout)
+                
+                # Wait a bit for any lazy-loaded content
+                await asyncio.sleep(1)
+                
+                # Get the rendered HTML
+                html_content = await page.content()
+                return html_content
+            finally:
+                await page.close()
+                
+        except Exception as e:
+            logger.error(f"Error fetching {url}: {str(e)}")
+            return None
 
     async def scrape_article(self, url: str, source: str = None) -> Optional[Dict]:
         """
-        Scrape article content from URL asynchronously
+        Scrape article content from URL
         
         Args:
             url: Article URL
@@ -111,14 +118,18 @@ class HTMLScraper:
             tag.decompose()
 
         # Remove elements by class or ID (ads, social buttons, etc.)
-        for selector in [
+        unwanted_selectors = [
             "[class*='ad']", "[id*='ad']",
             "[class*='social']", "[id*='social']",
             "[class*='comment']", "[id*='comment']",
             "[class*='sidebar']", "[id*='sidebar']",
             "[class*='recommend']", "[id*='recommend']",
-            "[class*='related']", "[id*='related']"
-        ]:
+            "[class*='related']", "[id*='related']",
+            "[class*='newsletter']", "[id*='newsletter']",
+            "[class*='subscribe']", "[id*='subscribe']"
+        ]
+        
+        for selector in unwanted_selectors:
             for element in article_body.select(selector):
                 element.decompose()
 
@@ -134,59 +145,110 @@ class HTMLScraper:
     def _scrape_the_hindu(self, soup: BeautifulSoup, url: str) -> Optional[Dict]:
         """Scrape The Hindu article"""
         try:
-            title_elem = soup.find('h1', class_='title') or soup.find('h1', itemprop='headline')
-            title = title_elem.get_text(strip=True) if title_elem else "Untitled"
+            # Try multiple title selectors
+            title_elem = (soup.find('h1', class_='title') or 
+                         soup.find('h1', itemprop='headline') or
+                         soup.find('h1') or
+                         soup.select_one('h1.title') or
+                         soup.find('meta', property='og:title'))
             
-            article_body = soup.find('div', class_='article-body') or soup.find('div', itemprop='articleBody')
-            if not article_body:
-                article_body = soup.find('div', class_='article-content') or soup.find('article')
+            if title_elem:
+                if title_elem.name == 'meta':
+                    title = title_elem.get('content', '').strip() or "Untitled"
+                else:
+                    title = title_elem.get_text(strip=True) or "Untitled"
+            else:
+                title = "Untitled"
+            
+            # Try multiple body selectors
+            article_body = (soup.find('div', class_='article-body') or 
+                          soup.find('div', itemprop='articleBody') or
+                          soup.find('div', class_='article-content') or
+                          soup.find('article') or
+                          soup.select_one('div[itemprop="articleBody"]'))
             
             if article_body:
                 self._clean_article_body(article_body)
                 
-                # Get text content
+                # Get text content from paragraphs
                 paragraphs = article_body.find_all('p')
                 content = '\n\n'.join([p.get_text(strip=True) for p in paragraphs if p.get_text(strip=True)])
                 
-                return {
-                    'url': url,
-                    'title': title,
-                    'content': content,
-                    'source': 'The Hindu'
-                }
-            else:
-                logger.warning(f"Could not find article body for The Hindu article: {url}")
-                return None
+                if content and len(content.strip()) > 100:
+                    return {
+                        'url': url,
+                        'title': title,
+                        'content': content,
+                        'source': 'The Hindu'
+                    }
+            
+            logger.warning(f"Could not find article body for The Hindu article: {url}")
+            return None
                 
         except Exception as e:
             logger.error(f"Error scraping The Hindu article {url}: {str(e)}")
             return None
 
     def _scrape_indian_express(self, soup: BeautifulSoup, url: str) -> Optional[Dict]:
-        """Scrape Indian Express article"""
+        """Scrape Indian Express article with improved selectors"""
         try:
-            title_elem = soup.find('h1', class_='entry-title') or soup.find('h1', itemprop='headline')
-            title = title_elem.get_text(strip=True) if title_elem else "Untitled"
+            # Try multiple title selectors
+            title_elem = (soup.find('h1', class_='entry-title') or 
+                         soup.find('h1', itemprop='headline') or
+                         soup.find('h1', class_='native_story_title') or
+                         soup.find('h1') or
+                         soup.select_one('h1.native_story_title') or
+                         soup.select_one('h1.entry-title') or
+                         soup.find('meta', property='og:title'))
             
-            article_body = soup.find('div', class_='entry-content') or soup.find('div', itemprop='articleBody')
+            if title_elem:
+                if title_elem.name == 'meta':
+                    title = title_elem.get('content', '').strip() or "Untitled"
+                else:
+                    title = title_elem.get_text(strip=True) or "Untitled"
+            else:
+                title = "Untitled"
+            
+            # Try multiple body selectors - Indian Express uses various class names
+            article_body = (soup.find('div', class_='native_story_content') or
+                          soup.find('div', class_='entry-content') or
+                          soup.find('div', itemprop='articleBody') or
+                          soup.find('div', class_='article-content') or
+                          soup.select_one('div.native_story_content') or
+                          soup.select_one('div.entry-content') or
+                          soup.find('article') or
+                          soup.select_one('article .story_details'))
+            
+            # If still not found, try finding main content area
             if not article_body:
-                article_body = soup.find('div', class_='article-content') or soup.find('article')
+                # Look for common article containers
+                article_body = (soup.find('div', class_='full-details') or
+                              soup.find('div', id='article-body') or
+                              soup.find('div', class_='story-body') or
+                              soup.select_one('div[class*="story"]') or
+                              soup.select_one('div[class*="article"]'))
             
             if article_body:
                 self._clean_article_body(article_body)
                 
+                # Get text content from paragraphs
                 paragraphs = article_body.find_all('p')
                 content = '\n\n'.join([p.get_text(strip=True) for p in paragraphs if p.get_text(strip=True)])
                 
-                return {
-                    'url': url,
-                    'title': title,
-                    'content': content,
-                    'source': 'Indian Express'
-                }
-            else:
-                logger.warning(f"Could not find article body for Indian Express article: {url}")
-                return None
+                # If paragraphs don't give enough content, try getting all text
+                if not content or len(content.strip()) < 100:
+                    content = article_body.get_text(separator='\n\n', strip=True)
+                
+                if content and len(content.strip()) > 100:
+                    return {
+                        'url': url,
+                        'title': title,
+                        'content': content,
+                        'source': 'Indian Express'
+                    }
+            
+            logger.warning(f"Could not find article body for Indian Express article: {url}")
+            return None
                 
         except Exception as e:
             logger.error(f"Error scraping Indian Express article {url}: {str(e)}")
@@ -201,7 +263,7 @@ class HTMLScraper:
             
             if title_elem:
                 if title_elem.name == 'meta':
-                    title = title_elem.get('content', '') or "Untitled"
+                    title = title_elem.get('content', '').strip() or "Untitled"
                 else:
                     title = title_elem.get_text(strip=True) or "Untitled"
             else:
@@ -210,7 +272,8 @@ class HTMLScraper:
             article_body = (soup.find('article') or 
                           soup.find('div', class_='article') or
                           soup.find('div', class_='content') or
-                          soup.find('main'))
+                          soup.find('main') or
+                          soup.find('div', itemprop='articleBody'))
             
             if article_body:
                 self._clean_article_body(article_body)
@@ -218,17 +281,17 @@ class HTMLScraper:
                 paragraphs = article_body.find_all('p')
                 content = '\n\n'.join([p.get_text(strip=True) for p in paragraphs if p.get_text(strip=True)])
                 
-                return {
-                    'url': url,
-                    'title': title,
-                    'content': content,
-                    'source': source
-                }
-            else:
-                logger.warning(f"Could not find article body for generic article: {url}")
-                return None
+                if content and len(content.strip()) > 100:
+                    return {
+                        'url': url,
+                        'title': title,
+                        'content': content,
+                        'source': source
+                    }
+            
+            logger.warning(f"Could not find article body for generic article: {url}")
+            return None
                 
         except Exception as e:
             logger.error(f"Error in generic scraping for {url}: {str(e)}")
             return None
-

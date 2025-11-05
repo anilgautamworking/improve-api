@@ -67,13 +67,18 @@ async def main_async():
 
         # Combine stats
         qg_stats = orchestrator.stats
+        # Count errors instead of storing as list
+        errors_count = len(crawler_stats.get('errors', [])) + len(qg_stats.get('errors', []))
+        articles_failed_count = crawler_stats.get('articles_failed', 0) + qg_stats.get('articles_failed', 0)
+        
         final_stats = {
             'feeds_processed': crawler_stats['feeds_processed'],
             'articles_fetched': crawler_stats['articles_fetched'],
             'articles_processed': qg_stats['articles_processed'],
-            'articles_failed': crawler_stats['errors'] + qg_stats['errors'],
+            'articles_failed': articles_failed_count,
             'articles_skipped': qg_stats['articles_skipped'],
-            'questions_generated': qg_stats['questions_generated'],
+            'questions_generated': qg_stats.get('questions_generated', 0),
+            'errors_count': errors_count,
             'processing_time_seconds': int(time.time() - start_time)
         }
 
@@ -92,8 +97,8 @@ async def main_async():
         logger.info(f"  Questions Generated: {final_stats['questions_generated']}")
         logger.info(f"  Batches Saved: {saved_count}")
         logger.info(f"  Processing Time: {final_stats['processing_time_seconds']} seconds")
-        if final_stats['articles_failed']:
-            logger.warning(f"  Errors: {len(final_stats['articles_failed'])}")
+        if final_stats.get('errors_count', 0) > 0:
+            logger.warning(f"  Errors: {final_stats['errors_count']}")
         logger.info("=" * 80)
 
         logger.info("Pipeline completed successfully")

@@ -20,14 +20,17 @@ class RSSFetcher:
         Initialize RSS fetcher
         
         Args:
-            timeout: Request timeout in seconds
-            retry_attempts: Number of retry attempts on failure
-            retry_delay: Delay between retries in seconds
+            timeout: Request timeout in seconds (converted to milliseconds for Playwright)
+            retry_attempts: Number of retry attempts on failure (for RSS feed fetching)
+            retry_delay: Delay between retries in seconds (for RSS feed fetching)
         """
         self.timeout = timeout
         self.retry_attempts = retry_attempts
         self.retry_delay = retry_delay
-        self.html_scraper = HTMLScraper(timeout, retry_attempts, retry_delay)
+        # Convert timeout from seconds to milliseconds for Playwright
+        # Playwright timeout is in milliseconds, default 30000ms (30 seconds)
+        playwright_timeout = timeout * 1000 if timeout else 30000
+        self.html_scraper = HTMLScraper(timeout=playwright_timeout, headless=True)
 
     async def close_sessions(self):
         """Close any open sessions."""
@@ -100,8 +103,6 @@ class RSSFetcher:
                     'title': scraped_data.get('title') or entry.get('title', ''),
                     'published_date': self._parse_date(entry.get('published')),
                     'source': source,
-                    'description': entry.get('description', ''),
-                    'summary': entry.get('summary', ''),
                     'content': scraped_data['content']
                 }
             else:
