@@ -15,7 +15,7 @@ logger = logging.getLogger(__name__)
 class RSSFetcher:
     """Fetches articles from RSS feeds"""
 
-    def __init__(self, timeout: int = 30, retry_attempts: int = 3, retry_delay: int = 5):
+    def __init__(self, timeout: int = 30, retry_attempts: int = 3, retry_delay: int = 5, max_concurrent: int = 3):
         """
         Initialize RSS fetcher
         
@@ -23,6 +23,7 @@ class RSSFetcher:
             timeout: Request timeout in seconds (converted to milliseconds for Playwright)
             retry_attempts: Number of retry attempts on failure (for RSS feed fetching)
             retry_delay: Delay between retries in seconds (for RSS feed fetching)
+            max_concurrent: Maximum concurrent browser operations (default 3 to reduce CPU usage)
         """
         self.timeout = timeout
         self.retry_attempts = retry_attempts
@@ -30,7 +31,7 @@ class RSSFetcher:
         # Convert timeout from seconds to milliseconds for Playwright
         # Playwright timeout is in milliseconds, default 30000ms (30 seconds)
         playwright_timeout = timeout * 1000 if timeout else 30000
-        self.html_scraper = HTMLScraper(timeout=playwright_timeout, headless=True)
+        self.html_scraper = HTMLScraper(timeout=playwright_timeout, headless=True, max_concurrent=max_concurrent)
 
     async def close_sessions(self):
         """Close any open sessions."""

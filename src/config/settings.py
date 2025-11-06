@@ -68,6 +68,12 @@ class Settings:
     )  # Reduced per article
     RETRY_ATTEMPTS = int(os.getenv("RETRY_ATTEMPTS", "3"))
     RETRY_DELAY = int(os.getenv("RETRY_DELAY", "5"))
+    
+    # Browser/Scraping Configuration (CPU Optimization)
+    MAX_CONCURRENT_BROWSER_OPERATIONS = int(os.getenv("MAX_CONCURRENT_BROWSER_OPERATIONS", "3"))
+    # Limits concurrent Playwright browser operations to reduce CPU usage
+    # Lower values (1-3) = less CPU usage, slower processing
+    # Higher values (5-10) = faster processing, more CPU usage
 
     # Dashboard Configuration
     DASHBOARD_HOST = os.getenv("DASHBOARD_HOST", "0.0.0.0")

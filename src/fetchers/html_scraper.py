@@ -12,24 +12,62 @@ logger = logging.getLogger(__name__)
 class HTMLScraper:
     """Scrapes article content from HTML pages using Playwright for dynamic content"""
 
-    def __init__(self, timeout: int = 45000, headless: bool = True):
+    def __init__(self, timeout: int = 45000, headless: bool = True, max_concurrent: int = 3):
         """
         Initialize HTML scraper
         
         Args:
             timeout: Page load timeout in milliseconds (default 45 seconds)
             headless: Run browser in headless mode
+            max_concurrent: Maximum concurrent browser operations (default 3 to reduce CPU usage)
         """
         self.timeout = timeout
         self.headless = headless
         self.browser: Optional[Browser] = None
         self._playwright = None
+        # Semaphore to limit concurrent browser operations
+        self._semaphore = asyncio.Semaphore(max_concurrent)
 
     async def _get_browser(self) -> Browser:
-        """Get or create a Playwright browser instance"""
+        """Get or create a Playwright browser instance with CPU-optimized settings"""
         if self.browser is None:
             self._playwright = await async_playwright().start()
-            self.browser = await self._playwright.chromium.launch(headless=self.headless)
+            # CPU-optimized browser launch arguments
+            self.browser = await self._playwright.chromium.launch(
+                headless=self.headless,
+                args=[
+                    '--disable-blink-features=AutomationControlled',
+                    '--disable-dev-shm-usage',  # Overcome limited resource problems
+                    '--disable-extensions',  # Disable extensions
+                    '--disable-gpu',  # Disable GPU hardware acceleration
+                    '--disable-images',  # Don't load images (saves CPU/memory)
+                    '--disable-javascript-harmony-shipping',
+                    '--disable-setuid-sandbox',
+                    '--disable-software-rasterizer',
+                    '--disable-web-security',
+                    '--no-sandbox',  # Disable sandbox for better performance
+                    '--disable-background-networking',  # Disable background networking
+                    '--disable-background-timer-throttling',
+                    '--disable-backgrounding-occluded-windows',
+                    '--disable-breakpad',
+                    '--disable-component-extensions-with-background-pages',
+                    '--disable-default-apps',
+                    '--disable-features=TranslateUI',
+                    '--disable-hang-monitor',
+                    '--disable-ipc-flooding-protection',
+                    '--disable-notifications',
+                    '--disable-prompt-on-repost',
+                    '--disable-renderer-backgrounding',
+                    '--disable-sync',
+                    '--metrics-recording-only',
+                    '--mute-audio',
+                    '--no-first-run',
+                    '--safebrowsing-disable-auto-update',
+                    '--enable-automation',
+                    '--password-store=basic',
+                    '--use-mock-keychain',
+                ]
+            )
         return self.browser
 
     async def close_session(self):
@@ -43,7 +81,7 @@ class HTMLScraper:
 
     async def fetch_page(self, url: str) -> Optional[str]:
         """
-        Fetch HTML page content using Playwright
+        Fetch HTML page content using Playwright with rate limiting
         
         Args:
             url: URL to fetch
@@ -51,27 +89,39 @@ class HTMLScraper:
         Returns:
             HTML content as string or None on failure
         """
-        try:
-            browser = await self._get_browser()
-            page = await browser.new_page()
-            
+        # Use semaphore to limit concurrent operations
+        async with self._semaphore:
             try:
-                logger.info(f"Fetching HTML page: {url}")
-                # Use 'domcontentloaded' instead of 'networkidle' for faster loading
-                await page.goto(url, wait_until="domcontentloaded", timeout=self.timeout)
+                browser = await self._get_browser()
+                page = await browser.new_page()
                 
-                # Wait a bit for any lazy-loaded content
-                await asyncio.sleep(1)
-                
-                # Get the rendered HTML
-                html_content = await page.content()
-                return html_content
-            finally:
-                await page.close()
-                
-        except Exception as e:
-            logger.error(f"Error fetching {url}: {str(e)}")
-            return None
+                try:
+                    # Block images and other resources to reduce CPU usage
+                    async def handle_route(route):
+                        resource_type = route.request.resource_type
+                        if resource_type in ["image", "stylesheet", "font", "media"]:
+                            await route.abort()
+                        else:
+                            await route.continue_()
+                    
+                    await page.route("**/*", handle_route)
+                    
+                    logger.debug(f"Fetching HTML page: {url}")
+                    # Use 'domcontentloaded' instead of 'networkidle' for faster loading
+                    await page.goto(url, wait_until="domcontentloaded", timeout=self.timeout)
+                    
+                    # Reduced wait time - most content loads with domcontentloaded
+                    await asyncio.sleep(0.5)
+                    
+                    # Get the rendered HTML
+                    html_content = await page.content()
+                    return html_content
+                finally:
+                    await page.close()
+                    
+            except Exception as e:
+                logger.error(f"Error fetching {url}: {str(e)}")
+                return None
 
     async def scrape_article(self, url: str, source: str = None) -> Optional[Dict]:
         """

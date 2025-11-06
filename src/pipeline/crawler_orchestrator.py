@@ -5,6 +5,7 @@ from typing import List, Dict
 from src.fetchers.rss_fetcher import RSSFetcher
 from src.database.repositories.article_repository import ArticleRepository
 from src.database.db import get_db
+from src.config.settings import settings
 
 logger = logging.getLogger(__name__)
 
@@ -13,7 +14,8 @@ class CrawlerOrchestrator:
     """Orchestrates the crawling and storing of articles."""
 
     def __init__(self):
-        self.rss_fetcher = RSSFetcher()
+        # Use configured max concurrent operations for CPU optimization
+        self.rss_fetcher = RSSFetcher(max_concurrent=settings.MAX_CONCURRENT_BROWSER_OPERATIONS)
         self.db_session = next(get_db())
         self.article_repo = ArticleRepository(self.db_session)
         self.stats = {
