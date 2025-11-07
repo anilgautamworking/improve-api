@@ -34,6 +34,9 @@ RSS_FEEDS_THE_HINDU_ECONOMY=https://www.thehindu.com/business/economy/feeder/def
 RSS_FEEDS_INDIAN_EXPRESS_BUSINESS=https://indianexpress.com/section/business/feed/
 RSS_FEEDS_INDIAN_EXPRESS_EXPLAINED=https://indianexpress.com/section/explained/feed/
 
+# Category Control
+ENABLED_CATEGORIES=Business,Economy,Current Affairs,Polity,History,Geography,Science & Technology,Environment,International Relations,General Knowledge,Banking,Trade,Explained
+
 # Processing Configuration
 MAX_ARTICLES_PER_RUN=50
 QUESTION_COUNT_MIN=5

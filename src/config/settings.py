@@ -2,6 +2,7 @@
 
 import os
 import logging
+from typing import List
 from dotenv import load_dotenv
 
 load_dotenv()
@@ -83,6 +84,45 @@ class Settings:
     # Cron Schedule
     CRON_HOUR = int(os.getenv("CRON_HOUR", "6"))
     CRON_MINUTE = int(os.getenv("CRON_MINUTE", "0"))
+
+    # Category Control
+    # Comma-separated list of categories to enable for question generation.
+    # Leave empty or set to "*" to allow all categories.
+    ENABLED_CATEGORIES = os.getenv(
+        "ENABLED_CATEGORIES",
+        "Business,Economy,Current Affairs,Polity,History,Geography,Science & Technology,Environment,International Relations,General Knowledge,Banking,Trade,Explained",
+    )
+
+    @classmethod
+    def get_enabled_categories(cls) -> List[str]:
+        """Return normalized list of enabled categories. Empty list => all."""
+        value = cls.ENABLED_CATEGORIES
+        if not value or value.strip() == "*":
+            return []
+
+        categories = [cat.strip() for cat in value.split(",") if cat.strip()]
+
+        seen = set()
+        unique_categories = []
+        for cat in categories:
+            key = cat.lower()
+            if key not in seen:
+                unique_categories.append(cat)
+                seen.add(key)
+
+        return unique_categories
+
+    @classmethod
+    def is_category_enabled(cls, category: str) -> bool:
+        """Check whether a category is enabled for processing."""
+        enabled = cls.get_enabled_categories()
+        if not enabled:  # all categories allowed
+            return True
+        if not category:
+            return True
+
+        enabled_lower = {cat.lower() for cat in enabled}
+        return category.lower() in enabled_lower
 
     @classmethod
     def get_rss_feeds_config(cls) -> list:

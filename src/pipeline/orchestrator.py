@@ -54,6 +54,11 @@ class PipelineOrchestrator:
         for article in articles:
             try:
                 category = article.category or 'Business'
+
+                if not settings.is_category_enabled(category):
+                    logger.debug(f"Skipping article in disabled category: {category}")
+                    self.stats['articles_skipped'] += 1
+                    continue
                 
                 if category not in category_question_counts:
                     category_question_counts[category] = 0
