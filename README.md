@@ -94,6 +94,43 @@ python src/dashboard/app.py
 
 Access dashboard at: `http://localhost:5000`
 
+### API Server
+
+Start the unified API server (provides both API and admin dashboard):
+```bash
+python src/api/app.py
+# or use the convenience script:
+./scripts/start_api.sh
+```
+
+Access API at: `http://localhost:3001`
+
+#### Health Check Endpoints
+
+The API includes health check endpoints to monitor migration status:
+
+- **`GET /health`** - Basic health check with migration status
+- **`GET /api/health/migration`** - Detailed migration status
+
+Example response:
+```json
+{
+  "status": "healthy",
+  "service": "DailyQuestionBank API",
+  "migration": {
+    "schema_exists": true,
+    "questions_migrated": true,
+    "question_count": 150,
+    "batch_count": 45,
+    "categories_count": 6,
+    "status": "ready",
+    "message": "Frontend schema and questions are ready"
+  }
+}
+```
+
+**Note:** The API automatically checks migration status on startup and logs warnings if the frontend schema is missing or questions need migration.
+
 ## Project Structure
 
 ```

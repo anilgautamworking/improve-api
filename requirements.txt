@@ -20,9 +20,11 @@ sqlalchemy>=2.0.0
 alembic>=1.12.0
 psycopg2-binary>=2.9.9
 
-# Dashboard
+# Dashboard & API
 flask>=3.0.0
 flask-cors>=4.0.0
+bcrypt>=4.0.0
+pyjwt>=2.8.0
 
 # Utilities
 python-dateutil>=2.8.2

@@ -4,10 +4,11 @@ import logging
 from datetime import datetime
 from typing import List, Dict, Optional
 from src.database.repositories.article_repository import ArticleRepository
-from src.database.db import get_db
+from src.database.db import get_db_session, SessionLocal
 from src.generators.question_generator import QuestionGenerator
 from src.utils.filters import is_relevant_content, classify_category
 from src.utils.article_scorer import ArticleScorer
+from src.fetchers.pdf_parser import PDFParser
 import os
 
 logger = logging.getLogger(__name__)
@@ -16,16 +17,19 @@ logger = logging.getLogger(__name__)
 class PipelineOrchestrator:
     """Main pipeline coordinator for processing articles"""
 
-    def __init__(self, question_generator: Optional[QuestionGenerator] = None):
+    def __init__(self, question_generator: Optional[QuestionGenerator] = None, db_session=None):
         """
         Initialize pipeline orchestrator
         
         Args:
             question_generator: Question generator instance (creates new if None)
+            db_session: Database session (creates new if None)
         """
-        self.db_session = next(get_db())
+        self.db_session = db_session or SessionLocal()
+        self._owns_session = db_session is None
         self.article_repo = ArticleRepository(self.db_session)
         self.question_generator = question_generator or QuestionGenerator()
+        self.pdf_parser = PDFParser()
         
         # Statistics
         self.stats = {
@@ -35,6 +39,16 @@ class PipelineOrchestrator:
             'questions_generated': 0,
             'errors': []
         }
+    
+    def __enter__(self):
+        """Context manager entry"""
+        return self
+    
+    def __exit__(self, exc_type, exc_val, exc_tb):
+        """Context manager exit - close session if we own it"""
+        if self._owns_session:
+            self.db_session.close()
+        return False
 
     def process_articles_from_db(self) -> List[Dict]:
         """
@@ -53,7 +67,16 @@ class PipelineOrchestrator:
 
         for article in articles:
             try:
-                category = article.category or 'Business'
+                # Use stored category, or classify if missing, or default to Business
+                if article.category:
+                    category = article.category
+                else:
+                    # Re-classify if category is missing
+                    category = classify_category(article.content, article.title)
+                    # Update article in DB with classified category
+                    article.category = category
+                    self.db_session.commit()
+                    logger.debug(f"Classified article {article.url[:50]}... as {category}")
 
                 if not settings.is_category_enabled(category):
                     logger.debug(f"Skipping article in disabled category: {category}")

@@ -43,21 +43,18 @@ def extract_relevant_sections(text: str, keywords: list = None) -> str:
     
     Args:
         text: Full text content
-        keywords: List of keywords to search for
+        keywords: List of keywords to search for (defaults to built-in list)
         
     Returns:
         Filtered text containing relevant sections
     """
-    if not keywords:
-        return text
+    if not text:
+        return ""
     
-    # Default keywords for exam-relevant content
+    # Default keywords for exam-relevant content if none provided
     if not keywords:
-        keywords = [
-            'budget', 'economy', 'finance', 'banking', 'trade', 'policy',
-            'government', 'scheme', 'initiative', 'reform', 'regulation',
-            'infrastructure', 'employment', 'energy', 'fiscal', 'monetary'
-        ]
+        from src.utils.filters import RELEVANT_KEYWORDS
+        keywords = RELEVANT_KEYWORDS
     
     paragraphs = text.split('\n\n')
     relevant_paragraphs = []

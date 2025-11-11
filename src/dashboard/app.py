@@ -22,10 +22,26 @@ logger = logging.getLogger(__name__)
 app = Flask(__name__)
 app.secret_key = settings.DASHBOARD_SECRET_KEY
 
-# Initialize repositories with session
+# Store session in Flask app context
+@app.before_request
+def before_request():
+    """Create database session before each request"""
+    from flask import g
+    g.db_session = SessionLocal()
+
+@app.teardown_appcontext
+def teardown_db(error):
+    """Close database session after each request"""
+    from flask import g
+    db_session = g.pop('db_session', None)
+    if db_session:
+        db_session.close()
+
+# Initialize repositories with session from Flask context
 def get_repositories():
-    """Get fresh repository instances with database session"""
-    session = SessionLocal()
+    """Get fresh repository instances with database session from Flask context"""
+    from flask import g
+    session = g.db_session
     return (
         QuestionRepository(session),
         MetadataRepository(session),
@@ -161,5 +177,22 @@ def api_summaries():
 
 
 if __name__ == '__main__':
-    app.run(host=settings.DASHBOARD_HOST, port=settings.DASHBOARD_PORT, debug=True)
+    import os
+    # Debug mode configuration - default to False for security
+    # Set FLASK_DEBUG=true in .env for development
+    flask_debug = os.getenv("FLASK_DEBUG", "False").lower() == "true"
+    flask_env = os.getenv("FLASK_ENV", "production").lower()
+    
+    # Warn if debug mode is enabled in production-like environment
+    if flask_debug and flask_env == "production":
+        logger.warning("=" * 80)
+        logger.warning("⚠️  WARNING: Debug mode is enabled in production environment!")
+        logger.warning("This is a security risk. Set FLASK_DEBUG=False for production.")
+        logger.warning("=" * 80)
+    elif flask_debug:
+        logger.info(f"Debug mode enabled (FLASK_ENV={flask_env})")
+    
+    logger.info(f"Starting Dashboard on {settings.DASHBOARD_HOST}:{settings.DASHBOARD_PORT}")
+    logger.info(f"Debug mode: {flask_debug}, Environment: {flask_env}")
+    app.run(host=settings.DASHBOARD_HOST, port=settings.DASHBOARD_PORT, debug=flask_debug)
 

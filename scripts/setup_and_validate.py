@@ -84,8 +84,10 @@ def validate_env_variables():
     load_dotenv()
     
     required_vars = {
-        'DATABASE_URL': 'PostgreSQL database connection URL',
-        'AI_PROVIDER': 'AI provider (openai or ollama)',
+        "DATABASE_URL": "PostgreSQL database connection URL",
+        "AI_PROVIDER": "AI provider (openai or ollama)",
+        "JWT_SECRET": "JWT secret for authentication (REQUIRED - minimum 32 characters)",
+        "DASHBOARD_SECRET_KEY": "Dashboard secret key for Flask sessions (REQUIRED - minimum 32 characters)",
     }
     
     optional_vars = {
@@ -100,9 +102,36 @@ def validate_env_variables():
     for var, description in required_vars.items():
         value = os.getenv(var)
         if value:
-            print_success(f"{var} is set")
+            # Special validation for secrets
+            if var in ["JWT_SECRET", "DASHBOARD_SECRET_KEY"]:
+                weak_secrets = [
+                    "your-jwt-secret-change-in-production",
+                    "dev-secret-key-change-in-production",
+                    "your-jwt-secret-here-minimum-32-characters",
+                    "your-dashboard-secret-key-here-minimum-32-characters",
+                    "dev-secret",
+                    "secret",
+                    "password",
+                    "123456",
+                ]
+                if value in weak_secrets or len(value) < 32:
+                    print_error(
+                        f"{var} is too weak or too short (minimum 32 characters)"
+                    )
+                    print_info(
+                        f"Generate a strong secret: python -c 'import secrets; print(secrets.token_urlsafe(32))'"
+                    )
+                    all_valid = False
+                else:
+                    print_success(f"{var} is set and appears strong")
+            else:
+                print_success(f"{var} is set")
         else:
             print_error(f"{var} is not set ({description})")
+            if var in ["JWT_SECRET", "DASHBOARD_SECRET_KEY"]:
+                print_info(
+                    f"Generate a strong secret: python -c 'import secrets; print(secrets.token_urlsafe(32))'"
+                )
             all_valid = False
     
     # Check AI provider specific requirements
@@ -201,7 +230,7 @@ def check_playwright():
         with sync_playwright() as p:
             # Try to launch browser
             try:
-                browser = p.chromium.launch(headless=True)
+                browser = p.chromium.launch(headless=False)
                 browser.close()
                 print_success("Playwright Chromium browser is installed")
                 return True

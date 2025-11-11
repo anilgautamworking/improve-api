@@ -47,7 +47,16 @@ RETRY_DELAY=5
 # Dashboard Configuration
 DASHBOARD_HOST=0.0.0.0
 DASHBOARD_PORT=5000
-DASHBOARD_SECRET_KEY=dev-secret-key-change-in-production
+# CRITICAL: Generate a strong secret: python -c 'import secrets; print(secrets.token_urlsafe(32))'
+DASHBOARD_SECRET_KEY=your-dashboard-secret-key-here-minimum-32-characters
+
+# JWT Secret (REQUIRED)
+# CRITICAL: Generate a strong secret: python -c 'import secrets; print(secrets.token_urlsafe(32))'
+JWT_SECRET=your-jwt-secret-here-minimum-32-characters
+
+# Flask Configuration
+FLASK_ENV=development
+FLASK_DEBUG=True
 
 # Cron Schedule
 CRON_HOUR=6

@@ -4,7 +4,7 @@ import logging
 from typing import List, Dict
 from src.fetchers.rss_fetcher import RSSFetcher
 from src.database.repositories.article_repository import ArticleRepository
-from src.database.db import get_db
+from src.database.db import SessionLocal
 from src.config.settings import settings
 
 logger = logging.getLogger(__name__)
@@ -13,10 +13,11 @@ logger = logging.getLogger(__name__)
 class CrawlerOrchestrator:
     """Orchestrates the crawling and storing of articles."""
 
-    def __init__(self):
+    def __init__(self, db_session=None):
         # Use configured max concurrent operations for CPU optimization
         self.rss_fetcher = RSSFetcher(max_concurrent=settings.MAX_CONCURRENT_BROWSER_OPERATIONS)
-        self.db_session = next(get_db())
+        self.db_session = db_session or SessionLocal()
+        self._owns_session = db_session is None
         self.article_repo = ArticleRepository(self.db_session)
         self.stats = {
             'feeds_processed': 0,
@@ -26,15 +27,26 @@ class CrawlerOrchestrator:
             'articles_failed': 0,
             'errors': []
         }
+    
+    def __enter__(self):
+        """Context manager entry"""
+        return self
+    
+    def __exit__(self, exc_type, exc_val, exc_tb):
+        """Context manager exit - close session if we own it"""
+        if self._owns_session:
+            self.db_session.close()
+        return False
 
     async def crawl_rss_feeds(self, feed_configs: List[Dict]):
         """Crawl RSS feeds and store the articles."""
         for config in feed_configs:
             source = config.get('source', 'Unknown')
+            category = config.get('category', None)  # Get category from feed config
             feed_urls = config.get('urls', [])
 
             try:
-                logger.info(f"Crawling RSS feeds for {source}")
+                logger.info(f"Crawling RSS feeds for {source}" + (f" - {category}" if category else ""))
                 self.stats['feeds_processed'] += 1
 
                 articles_data = await self.rss_fetcher.get_today_articles(feed_urls, source)
@@ -45,6 +57,10 @@ class CrawlerOrchestrator:
                         if self.article_repo.get_by_url(article_data['url']):
                             self.stats['articles_skipped'] += 1
                             continue
+
+                        # Assign category from feed config if not already set
+                        if category and not article_data.get('category'):
+                            article_data['category'] = category
 
                         self.article_repo.create(article_data)
                         self.stats['articles_stored'] += 1
