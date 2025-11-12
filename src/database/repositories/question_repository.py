@@ -51,8 +51,14 @@ class QuestionRepository:
                 )
                 
                 session.add(question_record)
-                session.commit()
-                session.refresh(question_record)
+                # Only commit if we created our own session (not when using provided session in transaction)
+                if should_close:
+                    session.commit()
+                    session.refresh(question_record)
+                else:
+                    # Flush to get the ID without committing (for transaction context)
+                    session.flush()
+                    session.refresh(question_record)
                 
                 logger.info(f"Saved {question_record.total_questions} questions to database")
                 return question_record

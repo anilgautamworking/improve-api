@@ -224,7 +224,13 @@ class FrontendQuestionRepository:
                         stats['errors'].append(error_msg)
                         stats['skipped'] += 1
                 
-                session.commit()
+                # Only commit if we created our own session (not when using provided session in transaction)
+                if should_close:
+                    session.commit()
+                else:
+                    # Flush changes without committing (for transaction context)
+                    session.flush()
+                    
                 logger.info(f"Saved {stats['inserted']} questions to frontend table (skipped: {stats['skipped']})")
                 
             finally:

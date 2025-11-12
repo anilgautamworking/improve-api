@@ -14,6 +14,11 @@ fi
 # Check if .env file exists
 if [ ! -f .env ]; then
     echo "📝 Creating .env file from template..."
+    
+    # Generate strong secrets
+    DASHBOARD_SECRET=$(python3 -c 'import secrets; print(secrets.token_urlsafe(32))')
+    JWT_SECRET=$(python3 -c 'import secrets; print(secrets.token_urlsafe(32))')
+    
     cat > .env << EOF
 # Database Configuration
 DATABASE_URL=postgresql://postgres:postgres@localhost:5432/daily_question_bank
@@ -47,12 +52,12 @@ RETRY_DELAY=5
 # Dashboard Configuration
 DASHBOARD_HOST=0.0.0.0
 DASHBOARD_PORT=5000
-# CRITICAL: Generate a strong secret: python -c 'import secrets; print(secrets.token_urlsafe(32))'
-DASHBOARD_SECRET_KEY=your-dashboard-secret-key-here-minimum-32-characters
+# CRITICAL: Auto-generated strong secret (DO NOT use placeholder values)
+DASHBOARD_SECRET_KEY=${DASHBOARD_SECRET}
 
 # JWT Secret (REQUIRED)
-# CRITICAL: Generate a strong secret: python -c 'import secrets; print(secrets.token_urlsafe(32))'
-JWT_SECRET=your-jwt-secret-here-minimum-32-characters
+# CRITICAL: Auto-generated strong secret (DO NOT use placeholder values)
+JWT_SECRET=${JWT_SECRET}
 
 # Flask Configuration
 FLASK_ENV=development
@@ -62,9 +67,37 @@ FLASK_DEBUG=True
 CRON_HOUR=6
 CRON_MINUTE=0
 EOF
-    echo "✅ .env file created. Please add your OpenAI API key!"
+    echo "✅ .env file created with auto-generated secrets!"
+    echo "⚠️  Please add your OpenAI API key to the .env file"
 else
     echo "✅ .env file already exists"
+    echo "⚠️  Checking if secrets need to be updated..."
+    
+    # Check if secrets are placeholders
+    if grep -q "your-dashboard-secret-key-here-minimum-32-characters" .env || \
+       grep -q "your-jwt-secret-here-minimum-32-characters" .env; then
+        echo "⚠️  Found placeholder secrets in .env file!"
+        echo "Generating new secrets..."
+        
+        DASHBOARD_SECRET=$(python3 -c 'import secrets; print(secrets.token_urlsafe(32))')
+        JWT_SECRET=$(python3 -c 'import secrets; print(secrets.token_urlsafe(32))')
+        
+        # Update secrets in .env file
+        if grep -q "^DASHBOARD_SECRET_KEY=" .env; then
+            sed -i.bak "s|^DASHBOARD_SECRET_KEY=.*|DASHBOARD_SECRET_KEY=${DASHBOARD_SECRET}|" .env
+        else
+            echo "DASHBOARD_SECRET_KEY=${DASHBOARD_SECRET}" >> .env
+        fi
+        
+        if grep -q "^JWT_SECRET=" .env; then
+            sed -i.bak "s|^JWT_SECRET=.*|JWT_SECRET=${JWT_SECRET}|" .env
+        else
+            echo "JWT_SECRET=${JWT_SECRET}" >> .env
+        fi
+        
+        rm -f .env.bak
+        echo "✅ Secrets updated in .env file"
+    fi
 fi
 
 # Start PostgreSQL database

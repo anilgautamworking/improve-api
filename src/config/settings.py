@@ -79,39 +79,6 @@ class Settings:
     # Dashboard Configuration
     DASHBOARD_HOST = os.getenv("DASHBOARD_HOST", "0.0.0.0")
     DASHBOARD_PORT = int(os.getenv("DASHBOARD_PORT", "5000"))
-    
-    @classmethod
-    def _validate_dashboard_secret(cls):
-        """Validate dashboard secret key is set and strong"""
-        dashboard_secret = os.getenv("DASHBOARD_SECRET_KEY")
-        
-        if not dashboard_secret:
-            raise ValueError(
-                "DASHBOARD_SECRET_KEY environment variable is required. "
-                "Please set it in your .env file. "
-                "Generate a strong secret: python -c 'import secrets; print(secrets.token_urlsafe(32))'"
-            )
-        
-        # Check for default/weak secrets
-        weak_secrets = [
-            "dev-secret-key-change-in-production",
-            "your-dashboard-secret-key-here-minimum-32-characters",
-            "dev-secret",
-            "secret",
-            "password",
-            "123456",
-        ]
-        
-        if dashboard_secret in weak_secrets or len(dashboard_secret) < 32:
-            raise ValueError(
-                f"DASHBOARD_SECRET_KEY is too weak or too short (minimum 32 characters). "
-                f"Please set a strong secret in your .env file. "
-                f"Generate one: python -c 'import secrets; print(secrets.token_urlsafe(32))'"
-            )
-        
-        return dashboard_secret
-    
-    DASHBOARD_SECRET_KEY = _validate_dashboard_secret()
 
     # Cron Schedule
     CRON_HOUR = int(os.getenv("CRON_HOUR", "6"))
@@ -215,6 +182,41 @@ class Settings:
             raise ValueError("DATABASE_URL is required")
         return True
 
+
+def _validate_dashboard_secret():
+    """Validate dashboard secret key is set and strong"""
+    dashboard_secret = os.getenv("DASHBOARD_SECRET_KEY")
+    
+    if not dashboard_secret:
+        raise ValueError(
+            "DASHBOARD_SECRET_KEY environment variable is required. "
+            "Please set it in your .env file. "
+            "Generate a strong secret: python3 -c 'import secrets; print(secrets.token_urlsafe(32))'"
+        )
+    
+    # Check for default/weak secrets
+    weak_secrets = [
+        "dev-secret-key-change-in-production",
+        "your-dashboard-secret-key-here-minimum-32-characters",
+        "dev-secret",
+        "secret",
+        "password",
+        "123456",
+    ]
+    
+    if dashboard_secret in weak_secrets or len(dashboard_secret) < 32:
+        raise ValueError(
+            f"DASHBOARD_SECRET_KEY is too weak or too short (minimum 32 characters). "
+            f"Current value: '{dashboard_secret[:20]}...' ({len(dashboard_secret)} chars)\n"
+            f"Please set a strong secret in your .env file. "
+            f"Generate one: python3 -c 'import secrets; print(secrets.token_urlsafe(32))'"
+        )
+    
+    return dashboard_secret
+
+
+# Set validated dashboard secret
+Settings.DASHBOARD_SECRET_KEY = _validate_dashboard_secret()
 
 # Global settings instance
 settings = Settings()

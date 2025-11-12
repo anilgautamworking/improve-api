@@ -50,9 +50,13 @@ app = Flask(
 app.secret_key = settings.DASHBOARD_SECRET_KEY
 
 # Enable CORS for frontend
+# Allow CORS origins from environment variable or default to localhost for development
+cors_origins_str = os.getenv("CORS_ORIGINS", "http://localhost:5173,http://localhost:5174,http://localhost:3000")
+cors_origins = [origin.strip() for origin in cors_origins_str.split(",") if origin.strip()]
 CORS(
     app,
-    origins=["http://localhost:5173", "http://localhost:5174", "http://localhost:3000"],
+    origins=cors_origins,
+    supports_credentials=True,
 )
 
 # JWT Configuration
@@ -64,12 +68,13 @@ def validate_jwt_secret():
         raise ValueError(
             "JWT_SECRET environment variable is required. "
             "Please set it in your .env file. "
-            "Generate a strong secret: python -c 'import secrets; print(secrets.token_urlsafe(32))'"
+            "Generate a strong secret: python3 -c 'import secrets; print(secrets.token_urlsafe(32))'"
         )
     
     # Check for default/weak secrets
     weak_secrets = [
         "your-jwt-secret-change-in-production",
+        "your-jwt-secret-here-minimum-32-characters",
         "dev-secret",
         "secret",
         "password",
@@ -79,8 +84,9 @@ def validate_jwt_secret():
     if jwt_secret in weak_secrets or len(jwt_secret) < 32:
         raise ValueError(
             f"JWT_SECRET is too weak or too short (minimum 32 characters). "
+            f"Current value: '{jwt_secret[:20]}...' ({len(jwt_secret)} chars)\n"
             f"Please set a strong secret in your .env file. "
-            f"Generate one: python -c 'import secrets; print(secrets.token_urlsafe(32))'"
+            f"Generate one: python3 -c 'import secrets; print(secrets.token_urlsafe(32))'"
         )
     
     return jwt_secret
