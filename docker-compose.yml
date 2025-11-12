@@ -1,15 +1,13 @@
-version: '3.8'
-
 services:
   postgres:
     image: postgres:15-alpine
-    container_name: daily_question_bank_db
+    container_name: improve_db
     environment:
-      POSTGRES_USER: postgres
-      POSTGRES_PASSWORD: postgres
-      POSTGRES_DB: daily_question_bank
+      POSTGRES_USER: improve-user
+      POSTGRES_PASSWORD: improve123
+      POSTGRES_DB: improve-db
     ports:
-      - "5432:5432"
+      - "5442:5432"
     volumes:
       - postgres_data:/var/lib/postgresql/data
     healthcheck:
