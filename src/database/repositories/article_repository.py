@@ -34,3 +34,9 @@ class ArticleRepository:
         from datetime import datetime
         today = datetime.now().strftime('%Y-%m-%d')
         return self.db.query(Article).filter(Article.published_date == today).all()
+
+    def get_articles_by_urls(self, urls: List[str]) -> List[Article]:
+        """Fetch articles matching provided URLs."""
+        if not urls:
+            return []
+        return self.db.query(Article).filter(Article.url.in_(urls)).all()

@@ -4,11 +4,14 @@ import logging
 from datetime import datetime
 from typing import List, Dict, Optional
 from src.database.repositories.article_repository import ArticleRepository
-from src.database.db import get_db_session, SessionLocal
+from src.database.repositories.question_repository import QuestionRepository
+from src.database.repositories.article_log_repository import ArticleLogRepository
+from src.database.db import SessionLocal
 from src.generators.question_generator import QuestionGenerator
 from src.utils.filters import is_relevant_content, classify_category
 from src.utils.article_scorer import ArticleScorer
 from src.fetchers.pdf_parser import PDFParser
+from src.config.settings import settings
 import os
 
 logger = logging.getLogger(__name__)
@@ -28,6 +31,7 @@ class PipelineOrchestrator:
         self.db_session = db_session or SessionLocal()
         self._owns_session = db_session is None
         self.article_repo = ArticleRepository(self.db_session)
+        self.article_log_repo = ArticleLogRepository(self.db_session)
         self.question_generator = question_generator or QuestionGenerator()
         self.pdf_parser = PDFParser()
         
@@ -54,44 +58,94 @@ class PipelineOrchestrator:
         """
         Process articles from the database and generate questions.
         """
-        from src.config.settings import settings
-        from src.database.repositories.question_repository import QuestionRepository
-        
-        all_question_batches = []
-        category_question_counts = {}
+        all_question_batches: List[Dict] = []
+        category_question_counts: Dict[str, int] = {}
+        category_article_counts: Dict[str, int] = {}
         
         today = datetime.now().strftime('%Y-%m-%d')
         question_repo = QuestionRepository(self.db_session)
         
-        articles = self.article_repo.get_articles_for_today()
+        pending_urls = self.article_log_repo.get_pending_urls()
+        if not pending_urls:
+            logger.info("No pending articles to process.")
+            return all_question_batches
 
-        for article in articles:
+        articles = self.article_repo.get_articles_by_urls(pending_urls)
+        if not articles:
+            logger.info("Pending article URLs not found in database.")
+            return all_question_batches
+
+        article_map = {article.url: article for article in articles}
+        ordered_articles = [article_map[url] for url in pending_urls if url in article_map]
+        if not ordered_articles:
+            logger.info("No matching articles for pending URLs.")
+            return all_question_batches
+
+        scored_articles = []
+        for article in ordered_articles:
+            combined_text = (article.title or "") + " " + (article.content or "")
+            article_payload = {
+                'title': article.title or '',
+                'description': combined_text[:500],
+                'summary': combined_text[:500]
+            }
+            score = ArticleScorer.score_article(article_payload, article.category)
+            scored_articles.append((score, article))
+
+        scored_articles.sort(key=lambda item: item[0], reverse=True)
+
+        max_articles = settings.MAX_ARTICLES_PER_RUN or len(scored_articles)
+        articles_attempted = 0
+
+        for score, article in scored_articles:
+            if articles_attempted >= max_articles:
+                break
+
             try:
-                # Use stored category, or classify if missing, or default to Business
-                if article.category:
-                    category = article.category
-                else:
-                    # Re-classify if category is missing
-                    category = classify_category(article.content, article.title)
-                    # Update article in DB with classified category
+                # Use stored category, or classify if missing
+                category = article.category
+                if not category:
+                    category = classify_category(article.content or "", article.title or "")
                     article.category = category
                     self.db_session.commit()
-                    logger.debug(f"Classified article {article.url[:50]}... as {category}")
+                    logger.debug("Classified article %s as %s", article.url[:80], category)
 
-                if not settings.is_category_enabled(category):
-                    logger.debug(f"Skipping article in disabled category: {category}")
+                if settings.is_pdf_only_category(category) and not settings.is_pdf_source(article.source):
+                    logger.debug(
+                        "Skipping %s because category '%s' is PDF-only but source is '%s'",
+                        article.url,
+                        category,
+                        article.source or "Unknown"
+                    )
                     self.stats['articles_skipped'] += 1
                     continue
-                
+
+                if not settings.is_category_enabled(category):
+                    logger.debug("Skipping article in disabled category: %s", category)
+                    self.stats['articles_skipped'] += 1
+                    continue
+
+                # Respect per-category article limits
+                max_articles_per_category = settings.MAX_ARTICLES_PER_CATEGORY
+                category_article_counts.setdefault(category, 0)
+                if max_articles_per_category and max_articles_per_category > 0:
+                    if category_article_counts[category] >= max_articles_per_category:
+                        logger.debug("Skipping %s - per-category article limit reached", category)
+                        self.stats['articles_skipped'] += 1
+                        continue
+
                 if category not in category_question_counts:
-                    category_question_counts[category] = 0
                     existing_questions = question_repo.get_questions_by_category(category, limit=100)
                     today_existing = [q for q in existing_questions if q.date == today]
                     category_question_counts[category] = sum(q.total_questions for q in today_existing)
-
                 if category_question_counts[category] >= settings.QUESTIONS_PER_CATEGORY_PER_DAY:
+                    logger.debug("Skipping %s - daily question cap reached", category)
+                    self.stats['articles_skipped'] += 1
                     continue
-                
+
+                category_article_counts[category] += 1
+                articles_attempted += 1
+
                 result = self.process_article(
                     content=article.content,
                     url=article.url,
@@ -108,17 +162,29 @@ class PipelineOrchestrator:
                             result['questions'] = result['questions'][:remaining_slots]
                             result['total_questions'] = remaining_slots
                             questions_count = remaining_slots
+                        else:
+                            questions_count = 0
                     
+                    if questions_count == 0:
+                        logger.debug("No remaining question slots for %s", category)
+                        continue
+
                     all_question_batches.append(result)
                     category_question_counts[category] += questions_count
                     self.stats['articles_processed'] += 1
                     self.stats['questions_generated'] += questions_count
+                    self.article_log_repo.mark_processed(article.url, questions_count)
+                    self.db_session.commit()
                 else:
                     self.stats['articles_skipped'] += 1
+                    self.article_log_repo.mark_skipped(article.url)
+                    self.db_session.commit()
             except Exception as e:
                 logger.error(f"Error processing article {article.url}: {str(e)}")
                 self.stats['articles_failed'] += 1
                 self.stats['errors'].append(str(e))
+                self.article_log_repo.mark_failed(article.url, str(e))
+                self.db_session.commit()
         
         return all_question_batches
 
@@ -161,6 +227,10 @@ class PipelineOrchestrator:
         if not questions_data or questions_data.get("status") == "No relevant content":
             logger.info(f"No questions generated for article: {url}")
             return None
+
+        filtered_questions = questions_data.get("questions", [])
+        questions_data["questions"] = filtered_questions
+        questions_data["total_questions"] = len(filtered_questions)
 
         return questions_data
 
@@ -213,6 +283,10 @@ class PipelineOrchestrator:
             if not questions_data or questions_data.get("status") == "No relevant content":
                 logger.info(f"No questions generated for PDF: {pdf_path}")
                 return None
+
+            filtered_questions = questions_data.get("questions", [])
+            questions_data["questions"] = filtered_questions
+            questions_data["total_questions"] = len(filtered_questions)
             
             return questions_data
             
@@ -235,4 +309,3 @@ class PipelineOrchestrator:
             'questions_generated': 0,
             'errors': []
         }
-

@@ -2,7 +2,7 @@
 
 import os
 import logging
-from typing import List
+from typing import List, Optional, Dict
 from dotenv import load_dotenv
 
 load_dotenv()
@@ -30,14 +30,34 @@ class Settings:
 
     # Ollama Configuration
     OLLAMA_BASE_URL = os.getenv("OLLAMA_BASE_URL", "http://localhost:11434")
-    OLLAMA_MODEL = os.getenv("OLLAMA_MODEL", "llama3.1:8b")
+    OLLAMA_MODEL = os.getenv("OLLAMA_MODEL", "myaniu/qwen2.5-1m:14b")
     OLLAMA_TEMPERATURE = float(os.getenv("OLLAMA_TEMPERATURE", "0.7"))
 
     # Logging
     LOG_LEVEL = os.getenv("LOG_LEVEL", "INFO")
     LOG_FILE = os.getenv("LOG_FILE", "logs/daily_question_bank.log")
 
-    # RSS Feeds
+    # RSS Feeds - The Hindu
+    RSS_FEEDS_THE_HINDU_MAIN = os.getenv(
+        "RSS_FEEDS_THE_HINDU_MAIN",
+        "https://www.thehindu.com/feeder/default.rss"
+    )
+    RSS_FEEDS_THE_HINDU_INDIA = os.getenv(
+        "RSS_FEEDS_THE_HINDU_INDIA",
+        "https://www.thehindu.com/news/national/feeder/default.rss"
+    )
+    RSS_FEEDS_THE_HINDU_WORLD = os.getenv(
+        "RSS_FEEDS_THE_HINDU_WORLD",
+        "https://www.thehindu.com/news/international/feeder/default.rss"
+    )
+    RSS_FEEDS_THE_HINDU_OPINION = os.getenv(
+        "RSS_FEEDS_THE_HINDU_OPINION",
+        "https://www.thehindu.com/opinion/feeder/default.rss"
+    )
+    RSS_FEEDS_THE_HINDU_SPORTS = os.getenv(
+        "RSS_FEEDS_THE_HINDU_SPORTS",
+        "https://www.thehindu.com/sport/feeder/default.rss"
+    )
     RSS_FEEDS_THE_HINDU_BUSINESS = os.getenv(
         "RSS_FEEDS_THE_HINDU_BUSINESS",
         "https://www.thehindu.com/business/feeder/default.rss"
@@ -46,9 +66,81 @@ class Settings:
         "RSS_FEEDS_THE_HINDU_ECONOMY",
         "https://www.thehindu.com/business/economy/feeder/default.rss"
     )
+    RSS_FEEDS_THE_HINDU_MARKETS = os.getenv(
+        "RSS_FEEDS_THE_HINDU_MARKETS",
+        "https://www.thehindu.com/business/markets/feeder/default.rss"
+    )
+    RSS_FEEDS_THE_HINDU_SCIENCE = os.getenv(
+        "RSS_FEEDS_THE_HINDU_SCIENCE",
+        "https://www.thehindu.com/sci-tech/science/feeder/default.rss"
+    )
+
+    # RSS Feeds - The Hindu BusinessLine
+    RSS_FEEDS_BUSINESSLINE_MAIN = os.getenv(
+        "RSS_FEEDS_BUSINESSLINE_MAIN",
+        "https://www.thehindubusinessline.com/news/feeder/default.rss"
+    )
+    RSS_FEEDS_BUSINESSLINE_BUSINESS = os.getenv(
+        "RSS_FEEDS_BUSINESSLINE_BUSINESS",
+        "https://www.thehindubusinessline.com/business/feeder/default.rss"
+    )
+    RSS_FEEDS_BUSINESSLINE_ECONOMY = os.getenv(
+        "RSS_FEEDS_BUSINESSLINE_ECONOMY",
+        "https://www.thehindubusinessline.com/economy/feeder/default.rss"
+    )
+    RSS_FEEDS_BUSINESSLINE_MACRO = os.getenv(
+        "RSS_FEEDS_BUSINESSLINE_MACRO",
+        "https://www.thehindubusinessline.com/economy/macro-economy/feeder/default.rss"
+    )
+    RSS_FEEDS_BUSINESSLINE_AGRI = os.getenv(
+        "RSS_FEEDS_BUSINESSLINE_AGRI",
+        "https://www.thehindubusinessline.com/economy/agri-business/feeder/default.rss"
+    )
+    RSS_FEEDS_BUSINESSLINE_MONEY = os.getenv(
+        "RSS_FEEDS_BUSINESSLINE_MONEY",
+        "https://www.thehindubusinessline.com/money-and-banking/feeder/default.rss"
+    )
+    RSS_FEEDS_BUSINESSLINE_SPORTS = os.getenv(
+        "RSS_FEEDS_BUSINESSLINE_SPORTS",
+        "https://www.thehindubusinessline.com/sport/feeder/default.rss"
+    )
+
+    # RSS Feeds - Indian Express
+    RSS_FEEDS_INDIAN_EXPRESS_MAIN = os.getenv(
+        "RSS_FEEDS_INDIAN_EXPRESS_MAIN",
+        "https://indianexpress.com/feed"
+    )
+    RSS_FEEDS_INDIAN_EXPRESS_INDIA = os.getenv(
+        "RSS_FEEDS_INDIAN_EXPRESS_INDIA",
+        "https://indianexpress.com/section/india/feed"
+    )
+    RSS_FEEDS_INDIAN_EXPRESS_WORLD = os.getenv(
+        "RSS_FEEDS_INDIAN_EXPRESS_WORLD",
+        "https://indianexpress.com/section/world/feed"
+    )
     RSS_FEEDS_INDIAN_EXPRESS_BUSINESS = os.getenv(
         "RSS_FEEDS_INDIAN_EXPRESS_BUSINESS",
         "https://indianexpress.com/section/business/feed/"
+    )
+    RSS_FEEDS_INDIAN_EXPRESS_ECONOMICS = os.getenv(
+        "RSS_FEEDS_INDIAN_EXPRESS_ECONOMICS",
+        "https://indianexpress.com/section/economics/feed/"
+    )
+    RSS_FEEDS_INDIAN_EXPRESS_SPORTS = os.getenv(
+        "RSS_FEEDS_INDIAN_EXPRESS_SPORTS",
+        "https://indianexpress.com/section/sports/feed/"
+    )
+    RSS_FEEDS_INDIAN_EXPRESS_ENTERTAINMENT = os.getenv(
+        "RSS_FEEDS_INDIAN_EXPRESS_ENTERTAINMENT",
+        "https://indianexpress.com/section/entertainment/feed/"
+    )
+    RSS_FEEDS_INDIAN_EXPRESS_LIFESTYLE = os.getenv(
+        "RSS_FEEDS_INDIAN_EXPRESS_LIFESTYLE",
+        "https://indianexpress.com/section/lifestyle/feed/"
+    )
+    RSS_FEEDS_INDIAN_EXPRESS_TECHNOLOGY = os.getenv(
+        "RSS_FEEDS_INDIAN_EXPRESS_TECHNOLOGY",
+        "https://indianexpress.com/section/technology/feed/"
     )
     RSS_FEEDS_INDIAN_EXPRESS_EXPLAINED = os.getenv(
         "RSS_FEEDS_INDIAN_EXPRESS_EXPLAINED",
@@ -65,8 +157,11 @@ class Settings:
     )  # Target questions per category
     QUESTION_COUNT_MIN = int(os.getenv("QUESTION_COUNT_MIN", "3"))
     QUESTION_COUNT_MAX = int(
-        os.getenv("QUESTION_COUNT_MAX", "5")
-    )  # Reduced per article
+        os.getenv("QUESTION_COUNT_MAX", "4")
+    )
+    ARTICLE_CONTEXT_MAX_CHARS = int(
+        os.getenv("ARTICLE_CONTEXT_MAX_CHARS", "2500")
+    )  # Keep prompts within LLM timeout budget
     RETRY_ATTEMPTS = int(os.getenv("RETRY_ATTEMPTS", "3"))
     RETRY_DELAY = int(os.getenv("RETRY_DELAY", "5"))
     
@@ -89,7 +184,22 @@ class Settings:
     # Leave empty or set to "*" to allow all categories.
     ENABLED_CATEGORIES = os.getenv(
         "ENABLED_CATEGORIES",
-        "Business,Economy,Current Affairs,Polity,History,Geography,Science & Technology,Environment,International Relations,General Knowledge,Banking,Trade,Explained",
+        (
+            "Current Affairs,India,World,Opinion,Sports,Business,Economy,Markets,"
+            "Science & Technology,Banking,Macro Economy,Agri Business,Money & Banking,"
+            "Lifestyle,Entertainment,Technology,General Knowledge,Explained,Trade,Polity,History,Geography"
+        ),
+    )
+
+    MIN_ARTICLE_SCORE = float(os.getenv("MIN_ARTICLE_SCORE", "45"))
+    QUESTION_QUALITY_MIN_SCORE = float(os.getenv("QUESTION_QUALITY_MIN_SCORE", "65"))
+    PDF_ONLY_CATEGORIES = os.getenv(
+        "PDF_ONLY_CATEGORIES",
+        "Physics,Chemistry,Mathematics,Biology"
+    )
+    PDF_SOURCE_NAMES = os.getenv(
+        "PDF_SOURCE_NAMES",
+        "PDF,Academic PDF,NCERT,HC Verma,Study Material"
     )
 
     @classmethod
@@ -122,32 +232,97 @@ class Settings:
 
         enabled_lower = {cat.lower() for cat in enabled}
         return category.lower() in enabled_lower
+    
+    @classmethod
+    def get_pdf_only_categories(cls) -> List[str]:
+        """Categories that should only be served by PDF ingestion"""
+        return cls._parse_feed_urls(cls.PDF_ONLY_CATEGORIES)
+
+    @classmethod
+    def is_pdf_only_category(cls, category: Optional[str]) -> bool:
+        """Check whether a category must come from PDF sources"""
+        if not category:
+            return False
+        pdf_only = {cat.lower() for cat in cls.get_pdf_only_categories()}
+        return category.lower() in pdf_only
+
+    @classmethod
+    def get_pdf_sources(cls) -> List[str]:
+        """List of source labels treated as PDF/academic imports"""
+        return cls._parse_feed_urls(cls.PDF_SOURCE_NAMES)
+
+    @classmethod
+    def is_pdf_source(cls, source: Optional[str]) -> bool:
+        """Check whether the given source name counts as PDF/academic"""
+        if not source:
+            return False
+        valid_sources = {name.lower() for name in cls.get_pdf_sources()}
+        return source.lower() in valid_sources
+
+    @staticmethod
+    def _parse_feed_urls(value: str) -> List[str]:
+        """Parse comma or newline separated feed URLs into a list"""
+        if not value:
+            return []
+        normalized = value.replace("\n", ",")
+        return [url.strip() for url in normalized.split(",") if url.strip()]
+
+    @classmethod
+    def _build_feed_config(cls, source: str, category: str, urls_value: str) -> Optional[Dict]:
+        """Helper to build feed config entry"""
+        urls = cls._parse_feed_urls(urls_value)
+        if not urls:
+            return None
+        return {
+            "source": source,
+            "category": category,
+            "urls": urls
+        }
 
     @classmethod
     def get_rss_feeds_config(cls) -> list:
         """Get RSS feed configurations"""
-        return [
-            {
-                "source": "The Hindu",
-                "category": "Business",
-                "urls": [cls.RSS_FEEDS_THE_HINDU_BUSINESS]
-            },
-            {
-                "source": "The Hindu",
-                "category": "Economy",
-                "urls": [cls.RSS_FEEDS_THE_HINDU_ECONOMY]
-            },
-            {
-                "source": "Indian Express",
-                "category": "Business",
-                "urls": [cls.RSS_FEEDS_INDIAN_EXPRESS_BUSINESS]
-            },
-            {
-                "source": "Indian Express",
-                "category": "Explained",
-                "urls": [cls.RSS_FEEDS_INDIAN_EXPRESS_EXPLAINED]
-            }
+        feed_definitions = [
+            # The Hindu
+            ("The Hindu", "Current Affairs", cls.RSS_FEEDS_THE_HINDU_MAIN),
+            ("The Hindu", "India", cls.RSS_FEEDS_THE_HINDU_INDIA),
+            ("The Hindu", "World", cls.RSS_FEEDS_THE_HINDU_WORLD),
+            ("The Hindu", "Opinion", cls.RSS_FEEDS_THE_HINDU_OPINION),
+            ("The Hindu", "Sports", cls.RSS_FEEDS_THE_HINDU_SPORTS),
+            ("The Hindu", "Business", cls.RSS_FEEDS_THE_HINDU_BUSINESS),
+            ("The Hindu", "Economy", cls.RSS_FEEDS_THE_HINDU_ECONOMY),
+            ("The Hindu", "Markets", cls.RSS_FEEDS_THE_HINDU_MARKETS),
+            ("The Hindu", "Science & Technology", cls.RSS_FEEDS_THE_HINDU_SCIENCE),
+
+            # The Hindu BusinessLine
+            ("The Hindu BusinessLine", "Current Affairs", cls.RSS_FEEDS_BUSINESSLINE_MAIN),
+            ("The Hindu BusinessLine", "Business", cls.RSS_FEEDS_BUSINESSLINE_BUSINESS),
+            ("The Hindu BusinessLine", "Economy", cls.RSS_FEEDS_BUSINESSLINE_ECONOMY),
+            ("The Hindu BusinessLine", "Macro Economy", cls.RSS_FEEDS_BUSINESSLINE_MACRO),
+            ("The Hindu BusinessLine", "Agri Business", cls.RSS_FEEDS_BUSINESSLINE_AGRI),
+            ("The Hindu BusinessLine", "Money & Banking", cls.RSS_FEEDS_BUSINESSLINE_MONEY),
+            ("The Hindu BusinessLine", "Sports", cls.RSS_FEEDS_BUSINESSLINE_SPORTS),
+
+            # Indian Express
+            ("Indian Express", "Current Affairs", cls.RSS_FEEDS_INDIAN_EXPRESS_MAIN),
+            ("Indian Express", "India", cls.RSS_FEEDS_INDIAN_EXPRESS_INDIA),
+            ("Indian Express", "World", cls.RSS_FEEDS_INDIAN_EXPRESS_WORLD),
+            ("Indian Express", "Business", cls.RSS_FEEDS_INDIAN_EXPRESS_BUSINESS),
+            ("Indian Express", "Economy", cls.RSS_FEEDS_INDIAN_EXPRESS_ECONOMICS),
+            ("Indian Express", "Sports", cls.RSS_FEEDS_INDIAN_EXPRESS_SPORTS),
+            ("Indian Express", "Entertainment", cls.RSS_FEEDS_INDIAN_EXPRESS_ENTERTAINMENT),
+            ("Indian Express", "Lifestyle", cls.RSS_FEEDS_INDIAN_EXPRESS_LIFESTYLE),
+            ("Indian Express", "Technology", cls.RSS_FEEDS_INDIAN_EXPRESS_TECHNOLOGY),
+            ("Indian Express", "Explained", cls.RSS_FEEDS_INDIAN_EXPRESS_EXPLAINED),
         ]
+
+        feeds = []
+        for source, category, urls_value in feed_definitions:
+            config = cls._build_feed_config(source, category, urls_value)
+            if config:
+                feeds.append(config)
+
+        return feeds
 
     @classmethod
     def validate(cls) -> bool:
@@ -220,4 +395,3 @@ Settings.DASHBOARD_SECRET_KEY = _validate_dashboard_secret()
 
 # Global settings instance
 settings = Settings()
-

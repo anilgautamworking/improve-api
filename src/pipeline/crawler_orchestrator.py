@@ -4,6 +4,7 @@ import logging
 from typing import List, Dict
 from src.fetchers.rss_fetcher import RSSFetcher
 from src.database.repositories.article_repository import ArticleRepository
+from src.database.repositories.article_log_repository import ArticleLogRepository
 from src.database.db import SessionLocal
 from src.config.settings import settings
 
@@ -19,6 +20,7 @@ class CrawlerOrchestrator:
         self.db_session = db_session or SessionLocal()
         self._owns_session = db_session is None
         self.article_repo = ArticleRepository(self.db_session)
+        self.article_log_repo = ArticleLogRepository(self.db_session)
         self.stats = {
             'feeds_processed': 0,
             'articles_fetched': 0,
@@ -63,6 +65,13 @@ class CrawlerOrchestrator:
                             article_data['category'] = category
 
                         self.article_repo.create(article_data)
+                        self.article_log_repo.ensure_log(
+                            url=article_data['url'],
+                            title=article_data.get('title'),
+                            source=article_data.get('source', source),
+                            category=article_data.get('category', category),
+                        )
+                        self.db_session.commit()
                         self.stats['articles_stored'] += 1
                     except Exception as e:
                         logger.error(f"Error storing article {article_data.get('url', 'Unknown')}: {str(e)}")

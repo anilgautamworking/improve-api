@@ -17,23 +17,24 @@ class OllamaClient:
 
     # Recommended models for MCQ generation with JSON output (in order of preference)
     RECOMMENDED_MODELS = [
-        "llama3.1:8b",      # Best balance of quality and speed, excellent instruction following
-        "llama3.1:70b",    # Highest quality, requires more resources
-        "mistral",          # Great structured outputs, smaller model
-        "qwen2.5:7b",      # Good instruction following, efficient
-        "phi3",            # Small but capable, good for constrained resources
-        "llama3:8b",       # Alternative to llama3.1
+        "myaniu/qwen2.5-1m:14b",  # 1M context variant tuned for long-form generation
+        "llama3.1:8b",            # Balanced option when resources are limited
+        "llama3.1:70b",           # Highest quality, requires beefy hardware
+        "mistral",                # Great structured outputs, smaller model
+        "qwen2.5:7b",             # Efficient Qwen variant
+        "phi3",                   # Small but capable, good for constrained resources
+        "llama3:8b",              # Alternative to llama3.1
     ]
 
     def __init__(self, base_url: str = "http://localhost:11434", 
-                 model: str = "llama3.1:8b",
+                 model: str = "myaniu/qwen2.5-1m:14b",
                  temperature: float = 0.7):
         """
         Initialize Ollama client
         
         Args:
             base_url: Ollama API base URL (default: http://localhost:11434)
-            model: Model name to use (default: llama3.1:8b)
+            model: Model name to use (default: myaniu/qwen2.5-1m:14b)
             temperature: Sampling temperature (0.0 to 2.0)
         """
         self.base_url = base_url or os.getenv("OLLAMA_BASE_URL", "http://localhost:11434")
@@ -125,7 +126,7 @@ class OllamaClient:
                         },
                         "stream": False
                     },
-                    timeout=120  # 2 minute timeout
+                    timeout=180  # 2 minute timeout
                 )
                 
                 response.raise_for_status()
@@ -183,4 +184,3 @@ class OllamaClient:
     def list_recommended_models(cls) -> list:
         """Get list of recommended models for MCQ generation"""
         return cls.RECOMMENDED_MODELS.copy()
-
