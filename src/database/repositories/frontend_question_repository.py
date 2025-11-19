@@ -14,21 +14,39 @@ from src.database.db import SessionLocal
 
 logger = logging.getLogger(__name__)
 
-# Category mapping from automation backend to frontend categories
+# Category mapping from automation backend to fallback frontend categories
 CATEGORY_MAPPING = {
     'Business': 'Economy',
     'Economy': 'Economy',
     'Banking': 'Economy',
+    'Macro Economy': 'Economy',
+    'Agri Business': 'Economy',
+    'Money & Banking': 'Economy',
+    'Markets': 'Economy',
     'Trade': 'Economy',
     'Current Affairs': 'Current Affairs',
+    'India': 'Current Affairs',
+    'World': 'Current Affairs',
+    'Opinion': 'Current Affairs',
+    'Sports': 'Current Affairs',
+    'Explained': 'Current Affairs',
+    'International Relations': 'Current Affairs',
+    'News This Month': 'News This Month',
+    'News Last 3 Months': 'News Last 3 Months',
     'Polity': 'India GK',
     'History': 'History',
     'Geography': 'India GK',
     'Science & Technology': 'India GK',
+    'Technology': 'India GK',
     'Environment': 'India GK',
-    'International Relations': 'Current Affairs',
+    'Lifestyle': 'India GK',
+    'Entertainment': 'India GK',
     'General Knowledge': 'India GK',
-    'Explained': 'Current Affairs',
+    'India GK': 'India GK',
+    'Physics': 'India GK',
+    'Chemistry': 'India GK',
+    'Mathematics': 'India GK',
+    'Biology': 'India GK',
 }
 
 
@@ -44,6 +62,7 @@ class FrontendQuestionRepository:
         """
         self.db_session = db_session
         self._category_cache = None
+        self._allowed_difficulties = {'easy', 'medium', 'hard'}
 
     def _get_categories(self, session: Session) -> Dict[str, str]:
         """
@@ -141,11 +160,16 @@ class FrontendQuestionRepository:
                 
                 # Map automation category to frontend category
                 automation_category = questions_data.get('category', 'Current Affairs')
-                frontend_category = CATEGORY_MAPPING.get(automation_category, 'Current Affairs')
-                category_id = categories.get(frontend_category)
+                category_name = automation_category if automation_category in categories else CATEGORY_MAPPING.get(automation_category, automation_category)
+                
+                category_id = categories.get(category_name)
+                if not category_id:
+                    fallback_category = CATEGORY_MAPPING.get(automation_category, 'Current Affairs')
+                    category_id = categories.get(fallback_category)
+                    category_name = fallback_category
                 
                 if not category_id:
-                    error_msg = f"Category not found: {frontend_category}"
+                    error_msg = f"Category not found: {automation_category} (fallback {category_name})"
                     logger.error(error_msg)
                     stats['errors'].append(error_msg)
                     return stats
@@ -181,7 +205,9 @@ class FrontendQuestionRepository:
                                 continue
                         
                         # Determine difficulty and points
-                        difficulty = self._get_difficulty_from_content(question_text, explanation, source)
+                        difficulty = q.get('difficulty', '').strip().lower()
+                        if difficulty not in self._allowed_difficulties:
+                            difficulty = self._get_difficulty_from_content(question_text, explanation, source)
                         points = self._get_points_from_difficulty(difficulty)
                         
                         # Normalize answer to lowercase
@@ -324,4 +350,3 @@ class FrontendQuestionRepository:
         except Exception as e:
             logger.error(f"Error counting questions: {str(e)}")
             return 0
-

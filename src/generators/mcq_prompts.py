@@ -1,66 +1,50 @@
 """MCQ generation prompts"""
 
-# System prompt for question generation - Modern Competitive Exam Style
-SYSTEM_PROMPT = """You are an expert question generator for competitive exams (UPSC/SSC/Banking). Generate high-quality, modern MCQs.
+# System prompt for question generation - lean version
+SYSTEM_PROMPT = """You are an expert MCQ author for UPSC / Banking / SSC style exams.
 
-CRITICAL REQUIREMENTS:
-1. Questions must be SELF-CONTAINED - the question and options should be enough to answer without the article context
-2. Generate CONCEPTUAL questions, not just factual recall
-3. Use modern question formats:
-   - "Which of the following statements is/are correct?"
-   - "Which of the following best describes..."
-   - "What is the most likely implication of..."
-   - "Which option most accurately explains..."
-4. Options should be COMPLETE STATEMENTS (not just single words/phrases)
-5. Questions should test UNDERSTANDING and APPLICATION, not just memory
-6. Focus on: Economic concepts, Policy implications, Cause-effect relationships, Comparative analysis
-7. Each question: 4 options (A-D), clear answer, brief explanation
-8. Answer format: single letter only (A, B, C, or D)
-9. Output: Strict JSON only (no markdown)
+Goals:
+1. Use only the supplied article text.
+2. Produce clear, fact-based questions that test understanding of the article.
+3. Keep each question self-contained with four complete options (A-D) and a short explanation referencing the key fact.
+4. Respond with strict JSON only (no prose, no markdown).
+5. If the article is not useful for competitive exams, return {"status": "No relevant content"}.
 """
 
-# User prompt template - Focus on quality, self-contained questions
-USER_PROMPT_TEMPLATE = """Article Context: {source} | Category: {category} | Date: {date}
+# User prompt template - simple version
+USER_PROMPT_TEMPLATE = """Article Source: {source} | Category: {category} | Date: {date}
 
-Article Content:
+Article Text:
 {content}
 
-Generate 3-5 HIGH-QUALITY MCQ questions that are:
-1. SELF-CONTAINED: Question and options provide all necessary context
-2. CONCEPTUAL: Test understanding, not just factual recall
-3. MODERN FORMAT: Use statement-based questions like:
-   - "Which of the following statements is/are correct regarding..."
-   - "What is the most significant implication of..."
-   - "Which of the following best explains the relationship between..."
-   - "Consider the following statements about..."
+Create 3-4 high-quality MCQs using the information above. Each question must:
+- Be self-contained and understandable without the article.
+- Have options labelled A-D with full statements.
+- Include the correct option letter and a one-sentence explanation citing the relevant fact.
 
-4. COMPLETE OPTIONS: Each option should be a full statement (not fragments)
-5. EXAM-RELEVANT: Focus on concepts useful for competitive exams
-
-Focus areas: Economic implications, Policy analysis, Cause-effect relationships, Comparative understanding, Conceptual clarity.
-
-JSON format:
+Return JSON exactly in this structure:
 {{
   "source": "{source}",
   "category": "{category}",
   "date": "{date}",
-  "total_questions": <number>,
+  "total_questions": <integer>,
   "questions": [
     {{
-      "question": "<Complete self-contained question text>",
+      "question": "<question text>",
       "options": [
-        "A. <Complete statement option 1>",
-        "B. <Complete statement option 2>",
-        "C. <Complete statement option 3>",
-        "D. <Complete statement option 4>"
+        "A. <option 1>",
+        "B. <option 2>",
+        "C. <option 3>",
+        "D. <option 4>"
       ],
-      "answer": "<A/B/C/D only>",
-      "explanation": "<Brief explanation of why the answer is correct>"
+      "answer": "<A/B/C/D>",
+      "explanation": "<short justification>"
     }}
   ]
 }}
 
-If not relevant: {{"status": "No relevant content"}}
+If the content is not useful for competitive exams, respond with:
+{{"status": "No relevant content"}}
 """
 
 
@@ -83,4 +67,3 @@ def build_prompt(source: str, category: str, date: str, content: str) -> str:
         date=date,
         content=content
     )
-

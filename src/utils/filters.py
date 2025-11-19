@@ -12,17 +12,41 @@ RELEVANT_KEYWORDS = [
     'rbi', 'reserve bank', 'union budget', 'economic survey', 'gdp',
     'inflation', 'deficit', 'tax', 'revenue', 'expenditure',
     'ministry', 'department', 'commission', 'committee', 'report',
-    'index', 'indicator', 'growth', 'sector', 'industry'
+    'index', 'indicator', 'growth', 'sector', 'industry',
+    'parliament', 'supreme court', 'lok sabha', 'rajya sabha',
+    'diplomatic', 'bilateral', 'multilateral', 'geopolitics',
+    'climate', 'environment', 'science', 'technology', 'innovation',
+    'research', 'startup', 'space', 'isro', 'drdo', 'sports',
+    'olympics', 'world cup', 'cricket', 'hockey', 'football',
+    'agriculture', 'farmer', 'crop', 'irrigation', 'rural',
+    'msme', 'manufacturing', 'services', 'digital', 'ai', 'cyber',
+    'education', 'healthcare', 'vaccination', 'pandemic'
 ]
 
 # Categories for classification
 CATEGORIES = {
-    'Business': ['business', 'corporate', 'company', 'market', 'stock', 'share'],
-    'Economy': ['economy', 'economic', 'gdp', 'growth', 'inflation', 'fiscal'],
-    'Budget': ['budget', 'union budget', 'expenditure', 'revenue', 'allocation'],
-    'Polity': ['government', 'ministry', 'policy', 'scheme', 'initiative'],
-    'Banking': ['banking', 'rbi', 'reserve bank', 'monetary', 'interest rate'],
-    'Trade': ['trade', 'export', 'import', 'commerce', 'trading']
+    'Business': ['business', 'corporate', 'company', 'industry', 'merger', 'acquisition', 'sector'],
+    'Economy': ['economy', 'economic', 'gdp', 'growth', 'inflation', 'fiscal', 'macro', 'survey'],
+    'Markets': ['market', 'stock', 'share', 'sensex', 'nifty', 'capital market', 'bse', 'nse'],
+    'Banking': ['bank', 'banking', 'rbi', 'reserve bank', 'monetary', 'interest rate'],
+    'Money & Banking': ['money', 'credit', 'nbfc', 'lending', 'financial inclusion'],
+    'Macro Economy': ['macro', 'inflation', 'headline', 'cad', 'current account', 'fiscal deficit'],
+    'Agri Business': ['agri', 'agriculture', 'farmer', 'crop', 'mandi', 'rabi', 'kharif'],
+    'Current Affairs': ['government', 'policy', 'scheme', 'cabinet', 'ministry', 'commission'],
+    'India': ['india', 'indian', 'state', 'union territory', 'centre', 'domestic'],
+    'World': ['world', 'global', 'international', 'united nations', 'bilateral', 'diplomatic'],
+    'Opinion': ['opinion', 'editorial', 'column', 'commentary', 'perspective'],
+    'General Knowledge': ['gk', 'general knowledge', 'trivia', 'facts', 'awareness'],
+    'Sports': ['sport', 'game', 'match', 'tournament', 'league', 'athlete', 'team', 'olympic'],
+    'Science & Technology': ['science', 'technology', 'research', 'innovation', 'space', 'isro', 'drdo'],
+    'Technology': ['technology', 'digital', 'software', 'hardware', 'ai', 'cyber', 'it'],
+    'Entertainment': ['entertainment', 'film', 'movie', 'cinema', 'bollywood', 'hollywood', 'show'],
+    'Lifestyle': ['lifestyle', 'health', 'fitness', 'culture', 'travel', 'fashion', 'food'],
+    'Explained': ['explained', 'analysis', 'breakdown', 'context'],
+    'Trade': ['trade', 'export', 'import', 'commerce', 'fta', 'tariff'],
+    'Polity': ['constitution', 'parliament', 'lok sabha', 'rajya sabha', 'bill', 'act'],
+    'History': ['history', 'historical', 'freedom struggle', 'heritage', 'ancient', 'medieval'],
+    'Geography': ['geography', 'geological', 'mountain', 'river', 'climate', 'monsoon']
 }
 
 
@@ -88,6 +112,13 @@ def filter_by_source(source: str) -> bool:
     Returns:
         True if source should be processed
     """
-    allowed_sources = ["The Hindu", "Indian Express", "PDF", "Economic Survey", "Union Budget", "RBI Bulletin"]
+    allowed_sources = [
+        "The Hindu",
+        "The Hindu BusinessLine",
+        "Indian Express",
+        "PDF",
+        "Economic Survey",
+        "Union Budget",
+        "RBI Bulletin"
+    ]
     return source in allowed_sources
-

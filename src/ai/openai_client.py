@@ -6,6 +6,7 @@ from typing import Optional, Dict, List
 import logging
 import time
 from dotenv import load_dotenv
+from src.utils.circuit_breaker import CircuitBreaker, CircuitBreakerOpenError
 
 load_dotenv()
 
@@ -35,6 +36,16 @@ class OpenAIClient:
         self.temperature = float(os.getenv("OPENAI_TEMPERATURE", temperature))
         self.max_tokens = int(os.getenv("OPENAI_MAX_TOKENS", max_tokens))
         
+        # Initialize circuit breaker
+        failure_threshold = int(os.getenv("OPENAI_CIRCUIT_BREAKER_THRESHOLD", "5"))
+        recovery_timeout = float(os.getenv("OPENAI_CIRCUIT_BREAKER_TIMEOUT", "60.0"))
+        self.circuit_breaker = CircuitBreaker(
+            failure_threshold=failure_threshold,
+            recovery_timeout=recovery_timeout,
+            expected_exception=Exception,
+            name="openai"
+        )
+        
         logger.info(f"OpenAI client initialized with model: {self.model}")
 
     def generate_completion(self, prompt: str, system_prompt: Optional[str] = None,
@@ -62,18 +73,24 @@ class OpenAIClient:
             try:
                 logger.debug(f"Calling OpenAI API (attempt {attempt + 1})")
                 
-                response = self.client.chat.completions.create(
-                    model=self.model,
-                    messages=messages,
-                    temperature=self.temperature,
-                    max_tokens=self.max_tokens
-                )
+                # Use circuit breaker to protect API calls
+                def _make_api_call():
+                    return self.client.chat.completions.create(
+                        model=self.model,
+                        messages=messages,
+                        temperature=self.temperature,
+                        max_tokens=self.max_tokens
+                    )
                 
+                response = self.circuit_breaker.call(_make_api_call)
                 content = response.choices[0].message.content
                 logger.debug(f"Successfully generated completion ({len(content)} characters)")
                 
                 return content
                 
+            except CircuitBreakerOpenError as e:
+                logger.error(f"Circuit breaker is open: {str(e)}")
+                return None
             except Exception as e:
                 logger.error(f"Error calling OpenAI API (attempt {attempt + 1}): {str(e)}")
                 if attempt < retry_attempts - 1:

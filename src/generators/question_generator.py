@@ -2,12 +2,13 @@
 
 import json
 import logging
-import os
+import re
 from typing import Optional, Dict, List, Union
 from datetime import datetime
 from src.ai.openai_client import OpenAIClient
 from src.ai.ollama_client import OllamaClient
 from src.generators.mcq_prompts import SYSTEM_PROMPT, build_prompt
+from src.orchestration.cancellation import honor_prefect_signals
 from src.utils.content_cleaner import clean_text, extract_relevant_sections
 
 logger = logging.getLogger(__name__)
@@ -52,7 +53,7 @@ class QuestionGenerator:
         
         self.min_questions = settings.QUESTION_COUNT_MIN
         self.max_questions = settings.QUESTION_COUNT_MAX  # Per article
-        self.max_content_length = 2500  # Limit content to ~2500 chars to save tokens
+        self.max_content_length = settings.ARTICLE_CONTEXT_MAX_CHARS
 
     def generate_questions(self, source: str, category: str, content: str, 
                           date: Optional[str] = None) -> Optional[Dict]:
@@ -80,19 +81,26 @@ class QuestionGenerator:
             return {"status": "No relevant content"}
         
         # Truncate content to save tokens (keep first N characters)
-        if len(relevant_content) > self.max_content_length:
-            relevant_content = relevant_content[:self.max_content_length] + "... [Content truncated]"
-            logger.debug(f"Truncated content from {len(content)} to {len(relevant_content)} characters")
+        if self.max_content_length > 0 and len(relevant_content) > self.max_content_length:
+            relevant_content = relevant_content[:self.max_content_length]
+            logger.debug(
+                "Truncated content from %s to %s characters",
+                len(content),
+                len(relevant_content),
+            )
         
         # Build prompt
+        honor_prefect_signals("Question generation - prompt build")
         prompt = build_prompt(source, category, date, relevant_content)
         
         # Generate questions via AI client (OpenAI or Ollama)
         logger.info(f"Generating questions for {source} - {category}")
+        honor_prefect_signals("Question generation - llm call")
         response_text = self.client.generate_completion(
             prompt=prompt,
             system_prompt=SYSTEM_PROMPT
         )
+        honor_prefect_signals("Question generation - parsing")
         
         if not response_text:
             logger.error(f"Failed to generate questions for {source}")
@@ -148,6 +156,38 @@ class QuestionGenerator:
             response_text = '\n'.join(lines)
         
         return response_text.strip()
+
+    @staticmethod
+    def _clean_option_text(option: Union[str, int]) -> str:
+        """
+        Remove leading option labels like 'A.' or 'B)' to keep UI clean.
+        """
+        text = str(option).strip()
+        return re.sub(r"^[A-Da-d]\s*[\.\)\-:]\s*", "", text, count=1).strip()
+
+    @staticmethod
+    def _normalize_difficulty(raw_value: Optional[str]) -> str:
+        """
+        Normalize difficulty labels to easy/medium/hard.
+        """
+        if not raw_value:
+            return "medium"
+        value = str(raw_value).strip().lower()
+        mapping = {
+            "e": "easy",
+            "1": "easy",
+            "easy": "easy",
+            "beginner": "easy",
+            "m": "medium",
+            "2": "medium",
+            "medium": "medium",
+            "moderate": "medium",
+            "h": "hard",
+            "3": "hard",
+            "hard": "hard",
+            "difficult": "hard",
+        }
+        return mapping.get(value, "medium")
 
     def _validate_questions(self, data: Dict, source: str, category: str, date: str) -> Optional[Dict]:
         """
@@ -207,11 +247,19 @@ class QuestionGenerator:
                 logger.warning(f"Skipping question {i+1}: invalid answer '{answer_raw}' (extracted: '{answer}')")
                 continue
             
+            normalized_options = [self._clean_option_text(opt) for opt in options]
+            if any(not opt for opt in normalized_options):
+                logger.warning(f"Skipping question {i+1}: empty option after normalization")
+                continue
+
+            difficulty = self._normalize_difficulty(q.get("difficulty"))
+            
             # Normalize question
             valid_question = {
                 "question": str(q["question"]).strip(),
-                "options": [str(opt).strip() for opt in options],
+                "options": normalized_options,
                 "answer": answer,
+                "difficulty": difficulty,
                 "explanation": str(q["explanation"]).strip()
             }
             
@@ -261,4 +309,3 @@ class QuestionGenerator:
                 logger.debug(f"Filtered duplicate question: {q.get('question', '')[:50]}...")
         
         return unique_questions
-

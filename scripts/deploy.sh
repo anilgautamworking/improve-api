@@ -81,11 +81,21 @@ echo -e "${BLUE}Running database migrations...${NC}"
 cd "$PROJECT_ROOT"
 # Ensure DATABASE_URL is loaded from .env
 export $(grep -v '^#' .env | grep DATABASE_URL | xargs) 2>/dev/null || true
-alembic upgrade head || {
-    echo -e "${RED}❌ Migration failed!${NC}"
-    echo "Please check database connection and .env file"
-    exit 1
-}
+
+# Try alembic command, fallback to python -m alembic
+if command -v alembic &> /dev/null; then
+    alembic upgrade head || {
+        echo -e "${RED}❌ Migration failed!${NC}"
+        echo "Please check database connection and .env file"
+        exit 1
+    }
+else
+    python -m alembic upgrade head || {
+        echo -e "${RED}❌ Migration failed!${NC}"
+        echo "Please check database connection and .env file"
+        exit 1
+    }
+fi
 echo -e "${GREEN}✓ Migrations completed successfully${NC}"
 
 # Stop existing PM2 process if running

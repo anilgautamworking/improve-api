@@ -153,6 +153,27 @@ def authenticate_token(f):
     return decorated_function
 
 
+def admin_required(f):
+    """Decorator to require admin role"""
+    @wraps(f)
+    @authenticate_token
+    def decorated_function(*args, **kwargs):
+        # Check if user has admin role
+        user_role = g.user.get("role", "user")
+        
+        if user_role != "admin":
+            logger.warning(f"Non-admin user {g.user.get('userId')} attempted to access admin endpoint")
+            return error_response(
+                ErrorCode.AUTH_INVALID_TOKEN,
+                403,
+                message="Admin access required"
+            )
+        
+        return f(*args, **kwargs)
+    
+    return decorated_function
+
+
 # ==================== Authentication Routes ====================
 
 
@@ -163,42 +184,69 @@ def signup():
         data = request.get_json()
         email = data.get("email")
         password = data.get("password")
+        exam_id = data.get("exam_id")  # Optional exam selection
 
         if not email or not password:
             return validation_error("email/password", "Email and password are required")
+
+        # Validate exam_id if provided
+        if exam_id:
+            exam_check = g.db_session.execute(
+                text("SELECT id FROM exams WHERE id = CAST(:exam_id AS uuid)"),
+                {"exam_id": exam_id}
+            ).fetchone()
+            if not exam_check:
+                return validation_error("exam_id", "Invalid exam_id provided")
 
         # Hash password
         password_hash = bcrypt.hashpw(
             password.encode("utf-8"), bcrypt.gensalt()
         ).decode("utf-8")
 
-        # Insert user
-        result = g.db_session.execute(
-            text("""
-            INSERT INTO users (email, password_hash) 
-            VALUES (:email, :password_hash) 
-            RETURNING id, email
-        """),
-            {"email": email, "password_hash": password_hash},
-        )
+        # Insert user (role defaults to 'user' via database default)
+        if exam_id:
+            result = g.db_session.execute(
+                text("""
+                INSERT INTO users (email, password_hash, exam_id) 
+                VALUES (:email, :password_hash, CAST(:exam_id AS uuid)) 
+                RETURNING id, email, role, exam_id
+            """),
+                {"email": email, "password_hash": password_hash, "exam_id": exam_id},
+            )
+        else:
+            result = g.db_session.execute(
+                text("""
+                INSERT INTO users (email, password_hash) 
+                VALUES (:email, :password_hash) 
+                RETURNING id, email, role, exam_id
+            """),
+                {"email": email, "password_hash": password_hash},
+            )
 
         user = result.fetchone()
         g.db_session.commit()
 
-        # Generate JWT token
+        # Generate JWT token with role
         token = jwt.encode(
             {
                 "userId": str(user[0]),
                 "email": user[1],
+                "role": user[2] or "user",  # Include role in token
+                "exam_id": str(user[3]) if user[3] else None,  # Include exam_id if set
                 "exp": datetime.utcnow() + timedelta(days=30),
             },
             JWT_SECRET,
             algorithm=JWT_ALGORITHM,
         )
 
-        return jsonify(
-            {"user": {"id": str(user[0]), "email": user[1]}, "token": token}
-        ), 201
+        user_data = {
+            "id": str(user[0]),
+            "email": user[1],
+            "role": user[2] or "user",
+            "exam_id": str(user[3]) if user[3] else None
+        }
+
+        return jsonify({"user": user_data, "token": token}), 201
 
     except Exception as e:
         g.db_session.rollback()
@@ -221,10 +269,10 @@ def login():
         if not email or not password:
             return validation_error("email/password", "Email and password are required")
 
-        # Get user
+        # Get user with role and exam_id
         result = g.db_session.execute(
             text("""
-            SELECT id, email, password_hash 
+            SELECT id, email, password_hash, role, exam_id 
             FROM users 
             WHERE email = :email
         """),
@@ -240,21 +288,61 @@ def login():
         if not bcrypt.checkpw(password.encode("utf-8"), user[2].encode("utf-8")):
             return error_response(ErrorCode.AUTH_INVALID_CREDENTIALS, 401)
 
-        # Generate JWT token
+        # Generate JWT token with role and exam_id
         token = jwt.encode(
             {
                 "userId": str(user[0]),
                 "email": user[1],
+                "role": user[3] or "user",  # Include role in token
+                "exam_id": str(user[4]) if user[4] else None,  # Include exam_id if set
                 "exp": datetime.utcnow() + timedelta(days=30),
             },
             JWT_SECRET,
             algorithm=JWT_ALGORITHM,
         )
 
-        return jsonify({"user": {"id": str(user[0]), "email": user[1]}, "token": token})
+        user_data = {
+            "id": str(user[0]),
+            "email": user[1],
+            "role": user[3] or "user",
+            "exam_id": str(user[4]) if user[4] else None
+        }
+
+        return jsonify({"user": user_data, "token": token})
 
     except Exception as e:
         return handle_exception(e, ErrorCode.SERVER_INTERNAL_ERROR, 400)
+
+
+# ==================== Exams Route ====================
+
+
+@app.route("/api/exams", methods=["GET"])
+def get_exams():
+    """Get all available exams"""
+    try:
+        result = g.db_session.execute(
+            text("""
+            SELECT id, name, category, description, created_at
+            FROM exams
+            ORDER BY name
+        """)
+        )
+        
+        exams = []
+        for row in result:
+            exams.append({
+                "id": str(row[0]),
+                "name": row[1],
+                "category": row[2],
+                "description": row[3],
+                "created_at": row[4].isoformat() if row[4] else None
+            })
+        
+        return jsonify({"exams": exams})
+    
+    except Exception as e:
+        return handle_exception(e, ErrorCode.DB_QUERY_ERROR, 500)
 
 
 # ==================== Categories Route ====================
@@ -263,7 +351,7 @@ def login():
 @app.route("/api/categories", methods=["GET"])
 @authenticate_token
 def get_categories():
-    """Get all categories with question counts"""
+    """Get all categories with question counts, filtered by exam_id if provided"""
     # Check if frontend schema exists
     if not check_frontend_schema_exists(g.db_session):
         return jsonify({
@@ -272,54 +360,127 @@ def get_categories():
         }), 503
     
     try:
-        # Get all categories
-        cat_result = g.db_session.execute(
-            text("""
-            SELECT id, name, description
-            FROM categories
-            ORDER BY 
-                CASE name
-                    WHEN 'News This Month' THEN 1
-                    WHEN 'News Last 3 Months' THEN 2
-                    WHEN 'Current Affairs' THEN 3
-                    WHEN 'India GK' THEN 4
-                    WHEN 'History' THEN 5
-                    WHEN 'Economy' THEN 6
-                    ELSE 7
-                END
-        """)
-        )
+        # Get exam_id from query param or user's JWT token
+        exam_id = request.args.get("exam_id")
+        if not exam_id:
+            # Try to get from user's JWT token
+            exam_id = g.user.get("exam_id") if hasattr(g, "user") else None
+        
+        # Build query based on exam_id
+        if exam_id:
+            # Filter categories by exam_id via exam_category junction table
+            # Note: DISTINCT not needed due to unique constraint on exam_category
+            cat_result = g.db_session.execute(
+                text("""
+                SELECT c.id, c.name, c.description,
+                    CASE c.name
+                        WHEN 'News This Month' THEN 1
+                        WHEN 'News Last 3 Months' THEN 2
+                        WHEN 'Current Affairs' THEN 3
+                        WHEN 'India GK' THEN 4
+                        WHEN 'History' THEN 5
+                        WHEN 'Economy' THEN 6
+                        ELSE 7
+                    END as sort_order
+                FROM categories c
+                INNER JOIN exam_category ec ON c.id = ec.category_id
+                WHERE ec.exam_id = CAST(:exam_id AS uuid)
+                ORDER BY sort_order
+            """),
+                {"exam_id": exam_id}
+            )
+        else:
+            # Get all categories if no exam_id provided
+            cat_result = g.db_session.execute(
+                text("""
+                SELECT id, name, description
+                FROM categories
+                ORDER BY 
+                    CASE name
+                        WHEN 'News This Month' THEN 1
+                        WHEN 'News Last 3 Months' THEN 2
+                        WHEN 'Current Affairs' THEN 3
+                        WHEN 'India GK' THEN 4
+                        WHEN 'History' THEN 5
+                        WHEN 'Economy' THEN 6
+                        ELSE 7
+                    END
+            """)
+            )
 
         categories = []
         for row in cat_result:
+            # Extract category data (ignore sort_order column if present)
             cat_id, cat_name, cat_desc = row[0], row[1], row[2]
 
-            # For time-based categories, count based on source_date
-            if cat_name == "News This Month":
-                count_result = g.db_session.execute(
-                    text("""
-                    SELECT COUNT(*) FROM questions 
-                    WHERE source_date IS NOT NULL 
-                    AND source_date::DATE >= CURRENT_DATE - INTERVAL '30 days'
-                    """)
-                )
-                question_count = count_result.scalar() or 0
-            elif cat_name == "News Last 3 Months":
-                count_result = g.db_session.execute(
-                    text("""
-                    SELECT COUNT(*) FROM questions 
-                    WHERE source_date IS NOT NULL 
-                    AND source_date::DATE >= CURRENT_DATE - INTERVAL '90 days'
-                    """)
-                )
-                question_count = count_result.scalar() or 0
+            # Build count query with exam_id filter if provided
+            if exam_id:
+                # For time-based categories, count based on source_date and exam_id
+                if cat_name == "News This Month":
+                    count_result = g.db_session.execute(
+                        text("""
+                        SELECT COUNT(*) FROM questions q
+                        INNER JOIN exam_category ec ON q.category_id = ec.category_id
+                        WHERE q.category_id = CAST(:cat_id AS uuid)
+                        AND q.source_date IS NOT NULL 
+                        AND q.source_date::DATE >= CURRENT_DATE - INTERVAL '30 days'
+                        AND ec.exam_id = CAST(:exam_id AS uuid)
+                        """),
+                        {"exam_id": exam_id, "cat_id": cat_id}
+                    )
+                    question_count = count_result.scalar() or 0
+                elif cat_name == "News Last 3 Months":
+                    count_result = g.db_session.execute(
+                        text("""
+                        SELECT COUNT(*) FROM questions q
+                        INNER JOIN exam_category ec ON q.category_id = ec.category_id
+                        WHERE q.category_id = CAST(:cat_id AS uuid)
+                        AND q.source_date IS NOT NULL 
+                        AND q.source_date::DATE >= CURRENT_DATE - INTERVAL '90 days'
+                        AND ec.exam_id = CAST(:exam_id AS uuid)
+                        """),
+                        {"exam_id": exam_id, "cat_id": cat_id}
+                    )
+                    question_count = count_result.scalar() or 0
+                else:
+                    # For regular categories, count by category_id and exam_id
+                    count_result = g.db_session.execute(
+                        text("""
+                        SELECT COUNT(*) FROM questions q
+                        INNER JOIN exam_category ec ON q.category_id = ec.category_id
+                        WHERE q.category_id = CAST(:cat_id AS uuid)
+                        AND ec.exam_id = CAST(:exam_id AS uuid)
+                        """),
+                        {"cat_id": cat_id, "exam_id": exam_id}
+                    )
+                    question_count = count_result.scalar() or 0
             else:
-                # For regular categories, count by category_id
-                count_result = g.db_session.execute(
-                    text("SELECT COUNT(*) FROM questions WHERE category_id = :cat_id"),
-                    {"cat_id": cat_id},
-                )
-                question_count = count_result.scalar() or 0
+                # No exam_id filter - original logic
+                if cat_name == "News This Month":
+                    count_result = g.db_session.execute(
+                        text("""
+                        SELECT COUNT(*) FROM questions 
+                        WHERE source_date IS NOT NULL 
+                        AND source_date::DATE >= CURRENT_DATE - INTERVAL '30 days'
+                        """)
+                    )
+                    question_count = count_result.scalar() or 0
+                elif cat_name == "News Last 3 Months":
+                    count_result = g.db_session.execute(
+                        text("""
+                        SELECT COUNT(*) FROM questions 
+                        WHERE source_date IS NOT NULL 
+                        AND source_date::DATE >= CURRENT_DATE - INTERVAL '90 days'
+                        """)
+                    )
+                    question_count = count_result.scalar() or 0
+                else:
+                    # For regular categories, count by category_id
+                    count_result = g.db_session.execute(
+                        text("SELECT COUNT(*) FROM questions WHERE category_id = :cat_id"),
+                        {"cat_id": cat_id},
+                    )
+                    question_count = count_result.scalar() or 0
 
             categories.append(
                 {
@@ -342,7 +503,7 @@ def get_categories():
 @app.route("/api/questions/generate", methods=["POST"])
 @authenticate_token
 def generate_questions():
-    """Generate/fetch questions by category"""
+    """Generate/fetch questions by category, filtered by exam_id if provided"""
     # Check if frontend schema exists
     if not check_frontend_schema_exists(g.db_session):
         return error_response(
@@ -355,42 +516,81 @@ def generate_questions():
         data = request.get_json()
         category = data.get("category", "all")
         count = data.get("count", 2)
+        exam_id = data.get("exam_id")  # Optional exam_id filter
+        
+        # If no exam_id in request, try to get from user's JWT token
+        if not exam_id:
+            exam_id = g.user.get("exam_id") if hasattr(g, "user") else None
 
         logger.info(
-            f"[generate_questions] Requested category: '{category}', count: {count}"
+            f"[generate_questions] Requested category: '{category}', count: {count}, exam_id: {exam_id}"
         )
 
-        # Build query based on category type
+        # Build query based on category type and exam_id
         if category == "News This Month":
             # Time-based: Last 30 days
-            query = text("""
-                SELECT * FROM questions 
-                WHERE source_date IS NOT NULL 
-                AND source_date::DATE >= CURRENT_DATE - INTERVAL '30 days'
-                ORDER BY created_at DESC 
-                LIMIT :limit
-            """)
-            params = {"limit": count * 3}
+            if exam_id:
+                query = text("""
+                    SELECT DISTINCT q.* FROM questions q
+                    INNER JOIN exam_category ec ON q.category_id = ec.category_id
+                    WHERE q.source_date IS NOT NULL 
+                    AND q.source_date::DATE >= CURRENT_DATE - INTERVAL '30 days'
+                    AND ec.exam_id = CAST(:exam_id AS uuid)
+                    ORDER BY q.created_at DESC 
+                    LIMIT :limit
+                """)
+                params = {"exam_id": exam_id, "limit": count * 3}
+            else:
+                query = text("""
+                    SELECT * FROM questions 
+                    WHERE source_date IS NOT NULL 
+                    AND source_date::DATE >= CURRENT_DATE - INTERVAL '30 days'
+                    ORDER BY created_at DESC 
+                    LIMIT :limit
+                """)
+                params = {"limit": count * 3}
 
         elif category == "News Last 3 Months":
             # Time-based: Last 90 days
-            query = text("""
-                SELECT * FROM questions 
-                WHERE source_date IS NOT NULL 
-                AND source_date::DATE >= CURRENT_DATE - INTERVAL '90 days'
-                ORDER BY created_at DESC 
-                LIMIT :limit
-            """)
-            params = {"limit": count * 3}
+            if exam_id:
+                query = text("""
+                    SELECT DISTINCT q.* FROM questions q
+                    INNER JOIN exam_category ec ON q.category_id = ec.category_id
+                    WHERE q.source_date IS NOT NULL 
+                    AND q.source_date::DATE >= CURRENT_DATE - INTERVAL '90 days'
+                    AND ec.exam_id = CAST(:exam_id AS uuid)
+                    ORDER BY q.created_at DESC 
+                    LIMIT :limit
+                """)
+                params = {"exam_id": exam_id, "limit": count * 3}
+            else:
+                query = text("""
+                    SELECT * FROM questions 
+                    WHERE source_date IS NOT NULL 
+                    AND source_date::DATE >= CURRENT_DATE - INTERVAL '90 days'
+                    ORDER BY created_at DESC 
+                    LIMIT :limit
+                """)
+                params = {"limit": count * 3}
 
         elif category == "all":
             # All questions
-            query = text("""
-                SELECT * FROM questions 
-                ORDER BY created_at DESC 
-                LIMIT :limit
-            """)
-            params = {"limit": count * 3}
+            if exam_id:
+                query = text("""
+                    SELECT DISTINCT q.* FROM questions q
+                    INNER JOIN exam_category ec ON q.category_id = ec.category_id
+                    WHERE ec.exam_id = CAST(:exam_id AS uuid)
+                    ORDER BY q.created_at DESC 
+                    LIMIT :limit
+                """)
+                params = {"exam_id": exam_id, "limit": count * 3}
+            else:
+                query = text("""
+                    SELECT * FROM questions 
+                    ORDER BY created_at DESC 
+                    LIMIT :limit
+                """)
+                params = {"limit": count * 3}
 
         else:
             # Specific category
@@ -421,13 +621,40 @@ def generate_questions():
                     }
                 ), 404
 
-            query = text("""
-                SELECT * FROM questions 
-                WHERE category_id = CAST(:category_id AS uuid)
-                ORDER BY created_at DESC 
-                LIMIT :limit
-            """)
-            params = {"category_id": str(cat_row[0]), "limit": count * 3}
+            # Build query with exam_id filter if provided
+            if exam_id:
+                # Verify category belongs to exam
+                exam_cat_check = g.db_session.execute(
+                    text("""
+                    SELECT 1 FROM exam_category 
+                    WHERE exam_id = CAST(:exam_id AS uuid) 
+                    AND category_id = CAST(:category_id AS uuid)
+                    """),
+                    {"exam_id": exam_id, "category_id": str(cat_row[0])}
+                ).fetchone()
+                
+                if not exam_cat_check:
+                    return jsonify({
+                        "error": f"Category '{category}' is not available for the selected exam"
+                    }), 404
+                
+                query = text("""
+                    SELECT DISTINCT q.* FROM questions q
+                    INNER JOIN exam_category ec ON q.category_id = ec.category_id
+                    WHERE q.category_id = CAST(:category_id AS uuid)
+                    AND ec.exam_id = CAST(:exam_id AS uuid)
+                    ORDER BY q.created_at DESC 
+                    LIMIT :limit
+                """)
+                params = {"category_id": str(cat_row[0]), "exam_id": exam_id, "limit": count * 3}
+            else:
+                query = text("""
+                    SELECT * FROM questions 
+                    WHERE category_id = CAST(:category_id AS uuid)
+                    ORDER BY created_at DESC 
+                    LIMIT :limit
+                """)
+                params = {"category_id": str(cat_row[0]), "limit": count * 3}
             
             logger.info(f"[generate_questions] Querying category_id: {cat_row[0]}, limit: {count * 3}")
 
@@ -626,6 +853,7 @@ def admin_dashboard():
 
 
 @app.route("/api/admin/stats")
+@admin_required
 def admin_stats():
     """API endpoint for admin statistics"""
     try:
@@ -664,6 +892,7 @@ def admin_stats():
 
 
 @app.route("/api/admin/questions/<date>")
+@admin_required
 def admin_questions_by_date(date):
     """API endpoint for questions by date (admin)"""
     try:
@@ -689,6 +918,7 @@ def admin_questions_by_date(date):
 
 
 @app.route("/api/admin/summaries")
+@admin_required
 def admin_summaries():
     """API endpoint for recent summaries (admin)"""
     try:
@@ -714,6 +944,652 @@ def admin_summaries():
 
         return jsonify(result)
     except Exception as e:
+        return handle_exception(e, ErrorCode.DB_QUERY_ERROR, 500)
+
+
+@app.route("/api/admin/question-library", methods=["GET"])
+@admin_required
+def admin_get_question_library_stats():
+    """Get question library statistics by category and exam"""
+    try:
+        # Questions by category
+        category_stats = g.db_session.execute(
+            text("""
+                SELECT c.id, c.name, COUNT(q.id) as question_count
+                FROM categories c
+                LEFT JOIN questions q ON c.id = q.category_id
+                GROUP BY c.id, c.name
+                ORDER BY question_count DESC, c.name
+            """)
+        )
+        
+        questions_by_category = []
+        for row in category_stats:
+            questions_by_category.append({
+                "category_id": str(row[0]),
+                "category_name": row[1],
+                "question_count": row[2] or 0
+            })
+        
+        # Questions by exam
+        exam_stats = g.db_session.execute(
+            text("""
+                SELECT e.id, e.name, COUNT(DISTINCT q.id) as question_count
+                FROM exams e
+                LEFT JOIN exam_category ec ON e.id = ec.exam_id
+                LEFT JOIN questions q ON ec.category_id = q.category_id
+                GROUP BY e.id, e.name
+                ORDER BY question_count DESC, e.name
+            """)
+        )
+        
+        questions_by_exam = []
+        for row in exam_stats:
+            questions_by_exam.append({
+                "exam_id": str(row[0]),
+                "exam_name": row[1],
+                "question_count": row[2] or 0
+            })
+        
+        # Total articles
+        article_count = g.db_session.execute(
+            text("SELECT COUNT(*) FROM articles")
+        ).scalar() or 0
+        
+        # Total questions
+        total_questions = g.db_session.execute(
+            text("SELECT COUNT(*) FROM questions")
+        ).scalar() or 0
+        
+        # Get orphaned categories (categories not associated with any exam)
+        orphaned_categories = g.db_session.execute(
+            text("""
+                SELECT c.id, c.name, c.description, COUNT(q.id) as question_count
+                FROM categories c
+                LEFT JOIN exam_category ec ON c.id = ec.category_id
+                LEFT JOIN questions q ON c.id = q.category_id
+                WHERE ec.category_id IS NULL
+                GROUP BY c.id, c.name, c.description
+                ORDER BY c.name
+            """)
+        )
+        
+        orphaned_list = []
+        for row in orphaned_categories:
+            orphaned_list.append({
+                "category_id": str(row[0]),
+                "category_name": row[1],
+                "description": row[2],
+                "question_count": row[3] or 0
+            })
+        
+        return jsonify({
+            "questions_by_category": questions_by_category,
+            "questions_by_exam": questions_by_exam,
+            "total_articles": article_count,
+            "total_questions": total_questions,
+            "orphaned_categories": orphaned_list,
+            "orphaned_categories_count": len(orphaned_list)
+        })
+    except Exception as e:
+        return handle_exception(e, ErrorCode.DB_QUERY_ERROR, 500)
+
+
+# ==================== Admin Exam Management Routes ====================
+
+
+@app.route("/api/admin/exams", methods=["GET"])
+@admin_required
+def admin_get_exams():
+    """Get all exams (admin)"""
+    try:
+        result = g.db_session.execute(
+            text("""
+            SELECT id, name, category, description, created_at
+            FROM exams
+            ORDER BY name
+        """)
+        )
+        
+        exams = []
+        for row in result:
+            exams.append({
+                "id": str(row[0]),
+                "name": row[1],
+                "category": row[2],
+                "description": row[3],
+                "created_at": row[4].isoformat() if row[4] else None
+            })
+        
+        return jsonify({"exams": exams})
+    except Exception as e:
+        return handle_exception(e, ErrorCode.DB_QUERY_ERROR, 500)
+
+
+@app.route("/api/admin/exams", methods=["POST"])
+@admin_required
+def admin_create_exam():
+    """Create a new exam (admin)"""
+    try:
+        data = request.get_json()
+        name = data.get("name")
+        category = data.get("category")
+        description = data.get("description")
+
+        if not name:
+            return validation_error("name", "Exam name is required")
+
+        result = g.db_session.execute(
+            text("""
+            INSERT INTO exams (name, category, description)
+            VALUES (:name, :category, :description)
+            RETURNING id, name, category, description, created_at
+        """),
+            {"name": name, "category": category, "description": description}
+        )
+        
+        exam_row = result.fetchone()
+        g.db_session.commit()
+
+        exam = {
+            "id": str(exam_row[0]),
+            "name": exam_row[1],
+            "category": exam_row[2],
+            "description": exam_row[3],
+            "created_at": exam_row[4].isoformat() if exam_row[4] else None
+        }
+
+        return jsonify(exam), 201
+    except Exception as e:
+        g.db_session.rollback()
+        if "duplicate key" in str(e).lower() or "unique constraint" in str(e).lower():
+            return error_response(ErrorCode.DB_QUERY_ERROR, 400, message="Exam with this name already exists")
+        return handle_exception(e, ErrorCode.DB_QUERY_ERROR, 500)
+
+
+@app.route("/api/admin/exams/<exam_id>", methods=["PUT"])
+@admin_required
+def admin_update_exam(exam_id):
+    """Update an exam (admin)"""
+    try:
+        data = request.get_json()
+        name = data.get("name")
+        category = data.get("category")
+        description = data.get("description")
+
+        if not name:
+            return validation_error("name", "Exam name is required")
+
+        result = g.db_session.execute(
+            text("""
+            UPDATE exams
+            SET name = :name, category = :category, description = :description, updated_at = now()
+            WHERE id = CAST(:exam_id AS uuid)
+            RETURNING id, name, category, description, created_at
+        """),
+            {"exam_id": exam_id, "name": name, "category": category, "description": description}
+        )
+        
+        exam_row = result.fetchone()
+        if not exam_row:
+            return error_response(ErrorCode.DB_QUERY_ERROR, 404, message="Exam not found")
+
+        g.db_session.commit()
+
+        exam = {
+            "id": str(exam_row[0]),
+            "name": exam_row[1],
+            "category": exam_row[2],
+            "description": exam_row[3],
+            "created_at": exam_row[4].isoformat() if exam_row[4] else None
+        }
+
+        return jsonify(exam)
+    except Exception as e:
+        g.db_session.rollback()
+        if "duplicate key" in str(e).lower() or "unique constraint" in str(e).lower():
+            return error_response(ErrorCode.DB_QUERY_ERROR, 400, message="Exam with this name already exists")
+        return handle_exception(e, ErrorCode.DB_QUERY_ERROR, 500)
+
+
+@app.route("/api/admin/orphaned-categories", methods=["GET"])
+@admin_required
+def admin_get_orphaned_categories():
+    """Get categories that are not associated with any exam"""
+    try:
+        result = g.db_session.execute(
+            text("""
+                SELECT c.id, c.name, c.description, COUNT(q.id) as question_count
+                FROM categories c
+                LEFT JOIN exam_category ec ON c.id = ec.category_id
+                LEFT JOIN questions q ON c.id = q.category_id
+                WHERE ec.category_id IS NULL
+                GROUP BY c.id, c.name, c.description
+                ORDER BY c.name
+            """)
+        )
+        
+        orphaned = []
+        for row in result:
+            orphaned.append({
+                "id": str(row[0]),
+                "name": row[1],
+                "description": row[2],
+                "question_count": row[3] or 0
+            })
+        
+        return jsonify({
+            "orphaned_categories": orphaned,
+            "count": len(orphaned)
+        })
+    except Exception as e:
+        return handle_exception(e, ErrorCode.DB_QUERY_ERROR, 500)
+
+
+@app.route("/api/admin/exams/<exam_id>/impact", methods=["GET"])
+@admin_required
+def admin_get_exam_deletion_impact(exam_id):
+    """Get impact analysis before deleting an exam (admin)"""
+    try:
+        # Get exam name
+        exam_result = g.db_session.execute(
+            text("SELECT name FROM exams WHERE id = CAST(:exam_id AS uuid)"),
+            {"exam_id": exam_id}
+        )
+        exam_row = exam_result.fetchone()
+        if not exam_row:
+            return error_response(ErrorCode.DB_QUERY_ERROR, 404, message="Exam not found")
+        
+        exam_name = exam_row[0]
+        
+        # Count related data
+        category_mappings_count = g.db_session.execute(
+            text("SELECT COUNT(*) FROM exam_category WHERE exam_id = CAST(:exam_id AS uuid)"),
+            {"exam_id": exam_id}
+        ).scalar() or 0
+        
+        user_count = g.db_session.execute(
+            text("SELECT COUNT(*) FROM users WHERE exam_id = CAST(:exam_id AS uuid)"),
+            {"exam_id": exam_id}
+        ).scalar() or 0
+        
+        # Get categories that are ONLY associated with this exam (will become orphaned)
+        categories_only_this_exam = g.db_session.execute(
+            text("""
+                SELECT c.id, c.name, COUNT(ec2.exam_id) as other_exam_count
+                FROM exam_category ec1
+                INNER JOIN categories c ON ec1.category_id = c.id
+                LEFT JOIN exam_category ec2 ON c.id = ec2.category_id AND ec2.exam_id != CAST(:exam_id AS uuid)
+                WHERE ec1.exam_id = CAST(:exam_id AS uuid)
+                GROUP BY c.id, c.name
+                HAVING COUNT(ec2.exam_id) = 0
+            """),
+            {"exam_id": exam_id}
+        ).fetchall()
+        
+        # Count questions that will no longer be accessible through this exam
+        # (but questions themselves will NOT be deleted)
+        questions_through_exam = g.db_session.execute(
+            text("""
+                SELECT COUNT(DISTINCT q.id) 
+                FROM questions q
+                INNER JOIN exam_category ec ON q.category_id = ec.category_id
+                WHERE ec.exam_id = CAST(:exam_id AS uuid)
+            """),
+            {"exam_id": exam_id}
+        ).scalar() or 0
+        
+        orphaned_categories = [{"id": str(row[0]), "name": row[1]} for row in categories_only_this_exam]
+        
+        return jsonify({
+            "exam_name": exam_name,
+            "category_mappings_to_remove": category_mappings_count,
+            "users_assigned": user_count,
+            "questions_no_longer_accessible": questions_through_exam,
+            "orphaned_categories": orphaned_categories,
+            "orphaned_categories_count": len(orphaned_categories),
+            "what_will_happen": {
+                "exam_category_mappings": "Will be removed (categories will remain)",
+                "user_exam_id": "Will be set to NULL (users will remain)",
+                "categories": "Will remain (even if orphaned)",
+                "questions": "Will remain (will no longer be accessible through this exam)"
+            }
+        })
+    except Exception as e:
+        return handle_exception(e, ErrorCode.DB_QUERY_ERROR, 500)
+
+
+@app.route("/api/admin/exams/<exam_id>", methods=["DELETE"])
+@admin_required
+def admin_delete_exam(exam_id):
+    """Delete an exam (admin)"""
+    try:
+        result = g.db_session.execute(
+            text("""
+            DELETE FROM exams
+            WHERE id = CAST(:exam_id AS uuid)
+            RETURNING id
+        """),
+            {"exam_id": exam_id}
+        )
+        
+        if not result.fetchone():
+            return error_response(ErrorCode.DB_QUERY_ERROR, 404, message="Exam not found")
+
+        g.db_session.commit()
+        return jsonify({"success": True})
+    except Exception as e:
+        g.db_session.rollback()
+        return handle_exception(e, ErrorCode.DB_QUERY_ERROR, 500)
+
+
+# ==================== Admin Category Management Routes ====================
+
+
+@app.route("/api/admin/categories", methods=["GET"])
+@admin_required
+def admin_get_categories():
+    """Get all categories (admin)"""
+    try:
+        result = g.db_session.execute(
+            text("""
+            SELECT id, name, description, created_at
+            FROM categories
+            ORDER BY name
+        """)
+        )
+        
+        categories = []
+        for row in result:
+            categories.append({
+                "id": str(row[0]),
+                "name": row[1],
+                "description": row[2],
+                "created_at": row[3].isoformat() if row[3] else None
+            })
+        
+        return jsonify({"categories": categories})
+    except Exception as e:
+        return handle_exception(e, ErrorCode.DB_QUERY_ERROR, 500)
+
+
+@app.route("/api/admin/categories", methods=["POST"])
+@admin_required
+def admin_create_category():
+    """Create a new category (admin)"""
+    try:
+        data = request.get_json()
+        name = data.get("name")
+        description = data.get("description")
+
+        if not name or not description:
+            return validation_error("name/description", "Category name and description are required")
+
+        result = g.db_session.execute(
+            text("""
+            INSERT INTO categories (name, description)
+            VALUES (:name, :description)
+            RETURNING id, name, description, created_at
+        """),
+            {"name": name, "description": description}
+        )
+        
+        category_row = result.fetchone()
+        g.db_session.commit()
+
+        category = {
+            "id": str(category_row[0]),
+            "name": category_row[1],
+            "description": category_row[2],
+            "created_at": category_row[3].isoformat() if category_row[3] else None
+        }
+
+        return jsonify(category), 201
+    except Exception as e:
+        g.db_session.rollback()
+        if "duplicate key" in str(e).lower() or "unique constraint" in str(e).lower():
+            return error_response(ErrorCode.DB_QUERY_ERROR, 400, message="Category with this name already exists")
+        return handle_exception(e, ErrorCode.DB_QUERY_ERROR, 500)
+
+
+@app.route("/api/admin/categories/<category_id>", methods=["PUT"])
+@admin_required
+def admin_update_category(category_id):
+    """Update a category (admin)"""
+    try:
+        data = request.get_json()
+        name = data.get("name")
+        description = data.get("description")
+
+        if not name or not description:
+            return validation_error("name/description", "Category name and description are required")
+
+        result = g.db_session.execute(
+            text("""
+            UPDATE categories
+            SET name = :name, description = :description
+            WHERE id = CAST(:category_id AS uuid)
+            RETURNING id, name, description, created_at
+        """),
+            {"category_id": category_id, "name": name, "description": description}
+        )
+        
+        category_row = result.fetchone()
+        if not category_row:
+            return error_response(ErrorCode.DB_QUERY_ERROR, 404, message="Category not found")
+
+        g.db_session.commit()
+
+        category = {
+            "id": str(category_row[0]),
+            "name": category_row[1],
+            "description": category_row[2],
+            "created_at": category_row[3].isoformat() if category_row[3] else None
+        }
+
+        return jsonify(category)
+    except Exception as e:
+        g.db_session.rollback()
+        if "duplicate key" in str(e).lower() or "unique constraint" in str(e).lower():
+            return error_response(ErrorCode.DB_QUERY_ERROR, 400, message="Category with this name already exists")
+        return handle_exception(e, ErrorCode.DB_QUERY_ERROR, 500)
+
+
+@app.route("/api/admin/categories/<category_id>/impact", methods=["GET"])
+@admin_required
+def admin_get_category_deletion_impact(category_id):
+    """Get impact analysis before deleting a category (admin)"""
+    try:
+        # Get category name
+        cat_result = g.db_session.execute(
+            text("SELECT name FROM categories WHERE id = CAST(:category_id AS uuid)"),
+            {"category_id": category_id}
+        )
+        cat_row = cat_result.fetchone()
+        if not cat_row:
+            return error_response(ErrorCode.DB_QUERY_ERROR, 404, message="Category not found")
+        
+        category_name = cat_row[0]
+        
+        # Count related data
+        exam_mappings_count = g.db_session.execute(
+            text("SELECT COUNT(*) FROM exam_category WHERE category_id = CAST(:category_id AS uuid)"),
+            {"category_id": category_id}
+        ).scalar() or 0
+        
+        # Get which exams use this category
+        exams_using_category = g.db_session.execute(
+            text("""
+                SELECT e.id, e.name
+                FROM exams e
+                INNER JOIN exam_category ec ON e.id = ec.exam_id
+                WHERE ec.category_id = CAST(:category_id AS uuid)
+            """),
+            {"category_id": category_id}
+        ).fetchall()
+        
+        question_count = g.db_session.execute(
+            text("SELECT COUNT(*) FROM questions WHERE category_id = CAST(:category_id AS uuid)"),
+            {"category_id": category_id}
+        ).scalar() or 0
+        
+        exams_list = [{"id": str(row[0]), "name": row[1]} for row in exams_using_category]
+        
+        return jsonify({
+            "category_name": category_name,
+            "exam_mappings_to_remove": exam_mappings_count,
+            "exams_using_category": exams_list,
+            "questions_count": question_count,
+            "warning": "Deleting this category will remove exam mappings, but questions will NOT be deleted. Consider archiving instead.",
+            "what_will_happen": {
+                "exam_category_mappings": "Will be removed (exams will remain)",
+                "questions": "Will remain (but may become orphaned if no other category exists)"
+            }
+        })
+    except Exception as e:
+        return handle_exception(e, ErrorCode.DB_QUERY_ERROR, 500)
+
+
+@app.route("/api/admin/categories/<category_id>", methods=["DELETE"])
+@admin_required
+def admin_delete_category(category_id):
+    """Delete a category (admin) - PREVENTS deletion if category has questions"""
+    try:
+        # First check if category has questions - we NEVER delete questions
+        question_count = g.db_session.execute(
+            text("SELECT COUNT(*) FROM questions WHERE category_id = CAST(:category_id AS uuid)"),
+            {"category_id": category_id}
+        ).scalar() or 0
+        
+        if question_count > 0:
+            return error_response(
+                ErrorCode.DB_QUERY_ERROR, 
+                400, 
+                message=f"Cannot delete category: {question_count} question(s) are associated with this category. Questions are never deleted. Please reassign or archive questions first."
+            )
+        
+        # Get category name for response
+        cat_result = g.db_session.execute(
+            text("SELECT name FROM categories WHERE id = CAST(:category_id AS uuid)"),
+            {"category_id": category_id}
+        )
+        cat_row = cat_result.fetchone()
+        if not cat_row:
+            return error_response(ErrorCode.DB_QUERY_ERROR, 404, message="Category not found")
+        
+        category_name = cat_row[0]
+        
+        # Delete the category (exam_category mappings will be CASCADE deleted)
+        result = g.db_session.execute(
+            text("""
+            DELETE FROM categories
+            WHERE id = CAST(:category_id AS uuid)
+            RETURNING id
+        """),
+            {"category_id": category_id}
+        )
+        
+        if not result.fetchone():
+            return error_response(ErrorCode.DB_QUERY_ERROR, 404, message="Category not found")
+
+        g.db_session.commit()
+        return jsonify({
+            "success": True,
+            "message": f"Category '{category_name}' deleted successfully. Exam mappings were removed."
+        })
+    except Exception as e:
+        g.db_session.rollback()
+        # Check if error is due to foreign key constraint
+        if "foreign key" in str(e).lower() or "constraint" in str(e).lower():
+            return error_response(
+                ErrorCode.DB_QUERY_ERROR,
+                400,
+                message="Cannot delete category: It is still referenced by other data. Questions are never deleted."
+            )
+        return handle_exception(e, ErrorCode.DB_QUERY_ERROR, 500)
+
+
+@app.route("/api/admin/exams/<exam_id>/categories", methods=["GET"])
+@admin_required
+def admin_get_exam_categories(exam_id):
+    """Get categories for a specific exam (admin)"""
+    try:
+        result = g.db_session.execute(
+            text("""
+            SELECT c.id, c.name, c.description
+            FROM categories c
+            INNER JOIN exam_category ec ON c.id = ec.category_id
+            WHERE ec.exam_id = CAST(:exam_id AS uuid)
+            ORDER BY c.name
+        """),
+            {"exam_id": exam_id}
+        )
+        
+        categories = []
+        for row in result:
+            categories.append({
+                "id": str(row[0]),
+                "name": row[1],
+                "description": row[2]
+            })
+        
+        return jsonify({"categories": categories})
+    except Exception as e:
+        return handle_exception(e, ErrorCode.DB_QUERY_ERROR, 500)
+
+
+@app.route("/api/admin/exams/<exam_id>/categories", methods=["POST"])
+@admin_required
+def admin_add_exam_category(exam_id):
+    """Add a category to an exam (admin)"""
+    try:
+        data = request.get_json()
+        category_id = data.get("category_id")
+
+        if not category_id:
+            return validation_error("category_id", "category_id is required")
+
+        result = g.db_session.execute(
+            text("""
+            INSERT INTO exam_category (exam_id, category_id)
+            VALUES (CAST(:exam_id AS uuid), CAST(:category_id AS uuid))
+            ON CONFLICT (exam_id, category_id) DO NOTHING
+            RETURNING id
+        """),
+            {"exam_id": exam_id, "category_id": category_id}
+        )
+        
+        if not result.fetchone():
+            return error_response(ErrorCode.DB_QUERY_ERROR, 400, message="Category already mapped to this exam")
+
+        g.db_session.commit()
+        return jsonify({"success": True}), 201
+    except Exception as e:
+        g.db_session.rollback()
+        return handle_exception(e, ErrorCode.DB_QUERY_ERROR, 500)
+
+
+@app.route("/api/admin/exams/<exam_id>/categories/<category_id>", methods=["DELETE"])
+@admin_required
+def admin_remove_exam_category(exam_id, category_id):
+    """Remove a category from an exam (admin)"""
+    try:
+        result = g.db_session.execute(
+            text("""
+            DELETE FROM exam_category
+            WHERE exam_id = CAST(:exam_id AS uuid) AND category_id = CAST(:category_id AS uuid)
+            RETURNING id
+        """),
+            {"exam_id": exam_id, "category_id": category_id}
+        )
+        
+        if not result.fetchone():
+            return error_response(ErrorCode.DB_QUERY_ERROR, 404, message="Category mapping not found")
+
+        g.db_session.commit()
+        return jsonify({"success": True})
+    except Exception as e:
+        g.db_session.rollback()
         return handle_exception(e, ErrorCode.DB_QUERY_ERROR, 500)
 
 
