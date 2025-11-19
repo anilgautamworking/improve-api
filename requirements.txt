@@ -19,6 +19,7 @@ openai>=1.0.0
 sqlalchemy>=2.0.0
 alembic>=1.12.0
 psycopg2-binary>=2.9.9
+asyncpg>=0.29.0  # Required for Prefect with PostgreSQL (production)
 
 # Dashboard & API
 flask>=3.0.0
