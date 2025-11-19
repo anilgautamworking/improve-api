@@ -85,6 +85,37 @@ Run the daily pipeline manually:
 python scripts/run_daily_pipeline.py
 ```
 
+### Prefect Orchestration (Optional)
+
+Prefect now powers an alternative orchestration path so you can take advantage of its Pythonic flows, dynamic DAGs, real-time UI, artifacts, and built-in resiliency features.
+
+1. Start the Prefect server (Docker Compose exposes it on http://localhost:4200):
+   ```bash
+   docker compose up prefect -d
+   export PREFECT_API_URL=http://127.0.0.1:4200/api
+   ```
+2. Create a work pool + register a deployment for the flow:
+   ```bash
+   prefect work-pool create improve-api --type process  # once
+   prefect deploy src/orchestration/prefect_flows.py:daily_question_bank_flow \
+     --name local-pipeline --pool improve-api --work-queue default
+   ```
+   _Prefect 3 dynamically inspects the entrypoint; seeing "Unable to read prefect.yaml" is safe when you don't use a project file._
+
+3. Start a worker to pick up scheduled/triggered runs:
+   ```bash
+   prefect worker start -p improve-api
+   ```
+4. Trigger runs from the UI or CLI (`prefect deployment run improve-api-pipeline/local-pipeline`).
+
+Each flow run publishes Markdown artifacts for the crawler stage, question generation stage, and overall summary so you can inspect counts/errors directly inside the Prefect UI timeline. For a quick ad-hoc execution without deployments you can still run:
+
+```bash
+python -m src.orchestration.prefect_flows
+```
+
+Flow runs now respect Prefect cancellation and pause signals: cancelling a run in the UI halts work shortly after the current article/LLM call, and using the Pause action will park the workers until you click Resume.
+
 ### Admin Dashboard
 
 Start the dashboard server:
@@ -166,4 +197,3 @@ black src/ tests/
 ## License
 
 [Add your license here]
-

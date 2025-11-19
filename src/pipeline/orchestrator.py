@@ -12,6 +12,8 @@ from src.utils.filters import is_relevant_content, classify_category
 from src.utils.article_scorer import ArticleScorer
 from src.fetchers.pdf_parser import PDFParser
 from src.config.settings import settings
+from src.orchestration.cancellation import honor_prefect_signals
+from src.utils.transaction_manager import savepoint, safe_commit
 import os
 
 logger = logging.getLogger(__name__)
@@ -98,6 +100,7 @@ class PipelineOrchestrator:
         articles_attempted = 0
 
         for score, article in scored_articles:
+            honor_prefect_signals("Question generation pipeline")
             if articles_attempted >= max_articles:
                 break
 
@@ -146,45 +149,53 @@ class PipelineOrchestrator:
                 category_article_counts[category] += 1
                 articles_attempted += 1
 
-                result = self.process_article(
-                    content=article.content,
-                    url=article.url,
-                    title=article.title,
-                    source=article.source,
-                    category=category
-                )
+                honor_prefect_signals("Question generation pipeline")
                 
-                if result:
-                    questions_count = result.get('total_questions', 0)
-                    if category_question_counts[category] + questions_count > settings.QUESTIONS_PER_CATEGORY_PER_DAY:
-                        remaining_slots = settings.QUESTIONS_PER_CATEGORY_PER_DAY - category_question_counts[category]
-                        if remaining_slots > 0:
-                            result['questions'] = result['questions'][:remaining_slots]
-                            result['total_questions'] = remaining_slots
-                            questions_count = remaining_slots
-                        else:
-                            questions_count = 0
+                # Use savepoint for each article to allow partial rollback
+                with savepoint(self.db_session, f"article_{articles_attempted}"):
+                    result = self.process_article(
+                        content=article.content,
+                        url=article.url,
+                        title=article.title,
+                        source=article.source,
+                        category=category
+                    )
                     
-                    if questions_count == 0:
-                        logger.debug("No remaining question slots for %s", category)
-                        continue
+                    if result:
+                        questions_count = result.get('total_questions', 0)
+                        if category_question_counts[category] + questions_count > settings.QUESTIONS_PER_CATEGORY_PER_DAY:
+                            remaining_slots = settings.QUESTIONS_PER_CATEGORY_PER_DAY - category_question_counts[category]
+                            if remaining_slots > 0:
+                                result['questions'] = result['questions'][:remaining_slots]
+                                result['total_questions'] = remaining_slots
+                                questions_count = remaining_slots
+                            else:
+                                questions_count = 0
+                        
+                        if questions_count == 0:
+                            logger.debug("No remaining question slots for %s", category)
+                            continue
 
-                    all_question_batches.append(result)
-                    category_question_counts[category] += questions_count
-                    self.stats['articles_processed'] += 1
-                    self.stats['questions_generated'] += questions_count
-                    self.article_log_repo.mark_processed(article.url, questions_count)
-                    self.db_session.commit()
-                else:
-                    self.stats['articles_skipped'] += 1
-                    self.article_log_repo.mark_skipped(article.url)
-                    self.db_session.commit()
+                        all_question_batches.append(result)
+                        category_question_counts[category] += questions_count
+                        self.stats['articles_processed'] += 1
+                        self.stats['questions_generated'] += questions_count
+                        self.article_log_repo.mark_processed(article.url, questions_count)
+                        safe_commit(self.db_session)
+                    else:
+                        self.stats['articles_skipped'] += 1
+                        self.article_log_repo.mark_skipped(article.url)
+                        safe_commit(self.db_session)
             except Exception as e:
                 logger.error(f"Error processing article {article.url}: {str(e)}")
                 self.stats['articles_failed'] += 1
                 self.stats['errors'].append(str(e))
-                self.article_log_repo.mark_failed(article.url, str(e))
-                self.db_session.commit()
+                # Savepoint will rollback automatically, but we still want to mark as failed
+                try:
+                    self.article_log_repo.mark_failed(article.url, str(e))
+                    safe_commit(self.db_session)
+                except Exception as commit_error:
+                    logger.error(f"Failed to mark article as failed: {str(commit_error)}")
         
         return all_question_batches
 
@@ -203,6 +214,7 @@ class PipelineOrchestrator:
         Returns:
             Question batch dictionary or None if skipped/failed.
         """
+        honor_prefect_signals("Question generation article")
         logger.debug(f"Processing article content (length: {len(content.strip())}): {content[:200]}...")
         if not content or len(content.strip()) < 100:
             logger.warning(f"Insufficient content for article: {url}")
@@ -217,6 +229,7 @@ class PipelineOrchestrator:
             category = classify_category(content, title)
 
         date = datetime.now().strftime('%Y-%m-%d')
+        honor_prefect_signals("Question generation article")
         questions_data = self.question_generator.generate_questions(
             source=source,
             category=category,
@@ -248,6 +261,7 @@ class PipelineOrchestrator:
             Question batch dictionary or None if skipped/failed
         """
         try:
+            honor_prefect_signals("PDF question generation")
             logger.info(f"Processing PDF: {pdf_path}")
             
             # Parse PDF
@@ -273,6 +287,7 @@ class PipelineOrchestrator:
             
             # Generate questions
             date = datetime.now().strftime('%Y-%m-%d')
+            honor_prefect_signals("PDF question generation")
             questions_data = self.question_generator.generate_questions(
                 source=source,
                 category=category,

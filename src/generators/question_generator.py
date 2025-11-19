@@ -8,6 +8,7 @@ from datetime import datetime
 from src.ai.openai_client import OpenAIClient
 from src.ai.ollama_client import OllamaClient
 from src.generators.mcq_prompts import SYSTEM_PROMPT, build_prompt
+from src.orchestration.cancellation import honor_prefect_signals
 from src.utils.content_cleaner import clean_text, extract_relevant_sections
 
 logger = logging.getLogger(__name__)
@@ -89,14 +90,17 @@ class QuestionGenerator:
             )
         
         # Build prompt
+        honor_prefect_signals("Question generation - prompt build")
         prompt = build_prompt(source, category, date, relevant_content)
         
         # Generate questions via AI client (OpenAI or Ollama)
         logger.info(f"Generating questions for {source} - {category}")
+        honor_prefect_signals("Question generation - llm call")
         response_text = self.client.generate_completion(
             prompt=prompt,
             system_prompt=SYSTEM_PROMPT
         )
+        honor_prefect_signals("Question generation - parsing")
         
         if not response_text:
             logger.error(f"Failed to generate questions for {source}")

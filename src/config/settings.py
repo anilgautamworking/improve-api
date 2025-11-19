@@ -10,6 +10,23 @@ load_dotenv()
 logger = logging.getLogger(__name__)
 
 
+def _int_setting(name: str, default: int) -> int:
+    """Safely parse integer environment variables, allowing blanks."""
+
+    value = os.getenv(name)
+    if value is None:
+        return default
+
+    value = value.strip()
+    if value == "":
+        return default
+
+    try:
+        return int(value)
+    except ValueError as exc:
+        raise ValueError(f"Invalid integer value for {name}: '{value}'") from exc
+
+
 class Settings:
     """Application settings loaded from environment variables"""
 
@@ -26,7 +43,7 @@ class Settings:
     OPENAI_API_KEY = os.getenv("OPENAI_API_KEY", "")
     OPENAI_MODEL = os.getenv("OPENAI_MODEL", "gpt-4")
     OPENAI_TEMPERATURE = float(os.getenv("OPENAI_TEMPERATURE", "0.7"))
-    OPENAI_MAX_TOKENS = int(os.getenv("OPENAI_MAX_TOKENS", "1500"))
+    OPENAI_MAX_TOKENS = _int_setting("OPENAI_MAX_TOKENS", 1500)
 
     # Ollama Configuration
     OLLAMA_BASE_URL = os.getenv("OLLAMA_BASE_URL", "http://localhost:11434")
@@ -148,36 +165,43 @@ class Settings:
     )
 
     # Processing Configuration
-    MAX_ARTICLES_PER_RUN = int(os.getenv("MAX_ARTICLES_PER_RUN", "50"))
-    MAX_ARTICLES_PER_CATEGORY = int(
-        os.getenv("MAX_ARTICLES_PER_CATEGORY", "5")
-    )  # Limit articles per category
-    QUESTIONS_PER_CATEGORY_PER_DAY = int(
-        os.getenv("QUESTIONS_PER_CATEGORY_PER_DAY", "12")
-    )  # Target questions per category
-    QUESTION_COUNT_MIN = int(os.getenv("QUESTION_COUNT_MIN", "3"))
-    QUESTION_COUNT_MAX = int(
-        os.getenv("QUESTION_COUNT_MAX", "4")
-    )
-    ARTICLE_CONTEXT_MAX_CHARS = int(
-        os.getenv("ARTICLE_CONTEXT_MAX_CHARS", "2500")
-    )  # Keep prompts within LLM timeout budget
-    RETRY_ATTEMPTS = int(os.getenv("RETRY_ATTEMPTS", "3"))
-    RETRY_DELAY = int(os.getenv("RETRY_DELAY", "5"))
-    
+    MAX_ARTICLES_PER_RUN = _int_setting("MAX_ARTICLES_PER_RUN", 50)
+    MAX_ARTICLES_PER_CATEGORY = _int_setting("MAX_ARTICLES_PER_CATEGORY", 5)
+    QUESTIONS_PER_CATEGORY_PER_DAY = _int_setting("QUESTIONS_PER_CATEGORY_PER_DAY", 12)
+    QUESTION_COUNT_MIN = _int_setting("QUESTION_COUNT_MIN", 3)
+    QUESTION_COUNT_MAX = _int_setting("QUESTION_COUNT_MAX", 4)
+    ARTICLE_CONTEXT_MAX_CHARS = _int_setting("ARTICLE_CONTEXT_MAX_CHARS", 2500)
+    RETRY_ATTEMPTS = _int_setting("RETRY_ATTEMPTS", 3)
+    RETRY_DELAY = _int_setting("RETRY_DELAY", 5)
+
+    # Prefect Task Timeouts (in seconds)
+    PREFECT_CRAWLER_TASK_TIMEOUT = _int_setting(
+        "PREFECT_CRAWLER_TASK_TIMEOUT", 3600
+    )  # 1 hour
+    PREFECT_QUESTION_TASK_TIMEOUT = _int_setting(
+        "PREFECT_QUESTION_TASK_TIMEOUT", 7200
+    )  # 2 hours
+
     # Browser/Scraping Configuration (CPU Optimization)
-    MAX_CONCURRENT_BROWSER_OPERATIONS = int(os.getenv("MAX_CONCURRENT_BROWSER_OPERATIONS", "3"))
+    MAX_CONCURRENT_BROWSER_OPERATIONS = _int_setting(
+        "MAX_CONCURRENT_BROWSER_OPERATIONS", 3
+    )
     # Limits concurrent Playwright browser operations to reduce CPU usage
     # Lower values (1-3) = less CPU usage, slower processing
     # Higher values (5-10) = faster processing, more CPU usage
 
     # Dashboard Configuration
     DASHBOARD_HOST = os.getenv("DASHBOARD_HOST", "0.0.0.0")
-    DASHBOARD_PORT = int(os.getenv("DASHBOARD_PORT", "5000"))
+    DASHBOARD_PORT = _int_setting("DASHBOARD_PORT", 5000)
 
     # Cron Schedule
-    CRON_HOUR = int(os.getenv("CRON_HOUR", "6"))
-    CRON_MINUTE = int(os.getenv("CRON_MINUTE", "0"))
+    CRON_HOUR = _int_setting("CRON_HOUR", 6)
+    CRON_MINUTE = _int_setting("CRON_MINUTE", 0)
+
+    # Prefect Orchestration (optional, defaults keep Prefect local)
+    PREFECT_API_URL = os.getenv("PREFECT_API_URL", "")
+    PREFECT_WORK_POOL = os.getenv("PREFECT_WORK_POOL", "improve-api")
+    PREFECT_WORK_QUEUE = os.getenv("PREFECT_WORK_QUEUE", "default")
 
     # Category Control
     # Comma-separated list of categories to enable for question generation.

@@ -292,3 +292,4 @@ def seed_exam_categories():
 if __name__ == "__main__":
     seed_exam_categories()
 
+

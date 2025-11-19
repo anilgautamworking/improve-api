@@ -7,6 +7,7 @@ from src.database.repositories.article_repository import ArticleRepository
 from src.database.repositories.article_log_repository import ArticleLogRepository
 from src.database.db import SessionLocal
 from src.config.settings import settings
+from src.orchestration.cancellation import honor_prefect_signals_async
 
 logger = logging.getLogger(__name__)
 
@@ -43,6 +44,7 @@ class CrawlerOrchestrator:
     async def crawl_rss_feeds(self, feed_configs: List[Dict]):
         """Crawl RSS feeds and store the articles."""
         for config in feed_configs:
+            await honor_prefect_signals_async("Crawler stage")
             source = config.get('source', 'Unknown')
             category = config.get('category', None)  # Get category from feed config
             feed_urls = config.get('urls', [])
@@ -55,6 +57,7 @@ class CrawlerOrchestrator:
                 self.stats['articles_fetched'] += len(articles_data)
 
                 for article_data in articles_data:
+                    await honor_prefect_signals_async("Crawler stage")
                     try:
                         if self.article_repo.get_by_url(article_data['url']):
                             self.stats['articles_skipped'] += 1

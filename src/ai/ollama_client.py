@@ -6,6 +6,7 @@ from typing import Optional
 import logging
 import time
 from dotenv import load_dotenv
+from src.utils.circuit_breaker import CircuitBreaker, CircuitBreakerOpenError
 
 load_dotenv()
 
@@ -52,6 +53,16 @@ class OllamaClient:
         if not self._check_model_available():
             logger.info(f"Model {self.model} not found. Attempting to pull...")
             self._pull_model()
+        
+        # Initialize circuit breaker
+        failure_threshold = int(os.getenv("OLLAMA_CIRCUIT_BREAKER_THRESHOLD", "5"))
+        recovery_timeout = float(os.getenv("OLLAMA_CIRCUIT_BREAKER_TIMEOUT", "60.0"))
+        self.circuit_breaker = CircuitBreaker(
+            failure_threshold=failure_threshold,
+            recovery_timeout=recovery_timeout,
+            expected_exception=Exception,
+            name="ollama"
+        )
         
         logger.info(f"Ollama client initialized with model: {self.model}")
 
@@ -116,21 +127,24 @@ class OllamaClient:
             try:
                 logger.debug(f"Calling Ollama API (attempt {attempt + 1})")
                 
-                response = requests.post(
-                    f"{self.base_url}/api/chat",
-                    json={
-                        "model": self.model,
-                        "messages": messages,
-                        "options": {
-                            "temperature": self.temperature,
+                # Use circuit breaker to protect API calls
+                def _make_api_call():
+                    response = requests.post(
+                        f"{self.base_url}/api/chat",
+                        json={
+                            "model": self.model,
+                            "messages": messages,
+                            "options": {
+                                "temperature": self.temperature,
+                            },
+                            "stream": False
                         },
-                        "stream": False
-                    },
-                    timeout=180  # 2 minute timeout
-                )
+                        timeout=180  # 2 minute timeout
+                    )
+                    response.raise_for_status()
+                    return response.json()
                 
-                response.raise_for_status()
-                result = response.json()
+                result = self.circuit_breaker.call(_make_api_call)
                 content = result.get("message", {}).get("content", "")
                 
                 if not content:
@@ -139,6 +153,9 @@ class OllamaClient:
                 logger.debug(f"Successfully generated completion ({len(content)} characters)")
                 return content
                 
+            except CircuitBreakerOpenError as e:
+                logger.error(f"Circuit breaker is open: {str(e)}")
+                return None
             except requests.exceptions.Timeout:
                 logger.warning(f"Ollama request timeout (attempt {attempt + 1})")
                 if attempt < retry_attempts - 1:
