@@ -19,11 +19,12 @@ services:
   prefect:
     image: prefecthq/prefect:3-latest
     container_name: prefect_server
-    command: ["prefect", "server", "start", "--host", "0.0.0.0"]
+    command: ["prefect", "server", "start", "--host", "0.0.0.0", "--ui"]
     environment:
       PREFECT_API_DATABASE_CONNECTION_URL: postgresql+asyncpg://improve-user:improve123@postgres:5432/prefect_db
-      PREFECT_UI_SERVE_BASE: /prefect
       PREFECT_API_URL: http://0.0.0.0:4200/api
+      PREFECT_UI_SERVE_BASE: /prefect
+      PREFECT_UI_API_URL: https://quiz.devwork.in/prefect/api
     ports:
       - "4200:4200"
     volumes:

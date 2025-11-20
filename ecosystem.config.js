@@ -35,6 +35,7 @@ module.exports = {
       exec_mode: 'fork',
       env: {
         NODE_ENV: 'production',
+        PREFECT_API_URL: 'http://127.0.0.1:4200/api',
       },
       error_file: './logs/pm2-worker-error.log',
       out_file: './logs/pm2-worker-out.log',
