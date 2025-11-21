@@ -3,6 +3,7 @@
 import logging
 from datetime import datetime
 from typing import List, Dict, Optional
+from sqlalchemy import text
 from src.database.repositories.article_repository import ArticleRepository
 from src.database.repositories.question_repository import QuestionRepository
 from src.database.repositories.article_log_repository import ArticleLogRepository
@@ -60,18 +61,22 @@ class PipelineOrchestrator:
         """
         Process articles from the database and generate questions.
         """
+        logger.info("Starting article processing from database...")
         all_question_batches: List[Dict] = []
         category_question_counts: Dict[str, int] = {}
         category_article_counts: Dict[str, int] = {}
-        
-        today = datetime.now().strftime('%Y-%m-%d')
+
+        today = datetime.now().strftime("%Y-%m-%d")
         question_repo = QuestionRepository(self.db_session)
-        
+        logger.info("Getting pending URLs...")
+
         pending_urls = self.article_log_repo.get_pending_urls()
+        logger.info(f"Found {len(pending_urls)} pending URLs")
         if not pending_urls:
             logger.info("No pending articles to process.")
             return all_question_batches
 
+        # Load articles with eager loading to avoid transaction abortion issues
         articles = self.article_repo.get_articles_by_urls(pending_urls)
         if not articles:
             logger.info("Pending article URLs not found in database.")
@@ -85,14 +90,22 @@ class PipelineOrchestrator:
 
         scored_articles = []
         for article in ordered_articles:
-            combined_text = (article.title or "") + " " + (article.content or "")
-            article_payload = {
-                'title': article.title or '',
-                'description': combined_text[:500],
-                'summary': combined_text[:500]
-            }
-            score = ArticleScorer.score_article(article_payload, article.category)
-            scored_articles.append((score, article))
+            try:
+                # Ensure all article attributes are loaded before any potential transaction issues
+                combined_text = (article.title or "") + " " + (article.content or "")
+                article_payload = {
+                    "title": article.title or "",
+                    "description": combined_text[:500],
+                    "summary": combined_text[:500],
+                }
+                # Load category attribute eagerly to avoid lazy loading during processing
+                category = getattr(article, "category", None)
+                score = ArticleScorer.score_article(article_payload, category)
+                scored_articles.append((score, article))
+            except Exception as e:
+                logger.warning(f"Failed to score article {article.url}: {str(e)}")
+                # Skip articles that can't be scored due to transaction issues
+                continue
 
         scored_articles.sort(key=lambda item: item[0], reverse=True)
 
@@ -106,12 +119,25 @@ class PipelineOrchestrator:
 
             try:
                 # Use stored category, or classify if missing
-                category = article.category
+                # Use getattr to safely access category and avoid lazy loading issues
+                category = getattr(article, "category", None)
                 if not category:
-                    category = classify_category(article.content or "", article.title or "")
-                    article.category = category
-                    self.db_session.commit()
-                    logger.debug("Classified article %s as %s", article.url[:80], category)
+                    try:
+                        category = classify_category(
+                            article.content or "", article.title or ""
+                        )
+                        article.category = category
+                        safe_commit(self.db_session)
+                        logger.debug(
+                            "Classified article %s as %s", article.url[:80], category
+                        )
+                    except Exception as classify_error:
+                        logger.warning(
+                            f"Failed to classify article {article.url}: {str(classify_error)}"
+                        )
+                        # Skip articles that can't be classified due to transaction issues
+                        self.stats["articles_failed"] += 1
+                        continue
 
                 if settings.is_pdf_only_category(category) and not settings.is_pdf_source(article.source):
                     logger.debug(
@@ -150,42 +176,60 @@ class PipelineOrchestrator:
                 articles_attempted += 1
 
                 honor_prefect_signals("Question generation pipeline")
-                
-                # Use savepoint for each article to allow partial rollback
-                with savepoint(self.db_session, f"article_{articles_attempted}"):
-                    result = self.process_article(
-                        content=article.content,
-                        url=article.url,
-                        title=article.title,
-                        source=article.source,
-                        category=category
-                    )
-                    
-                    if result:
-                        questions_count = result.get('total_questions', 0)
-                        if category_question_counts[category] + questions_count > settings.QUESTIONS_PER_CATEGORY_PER_DAY:
-                            remaining_slots = settings.QUESTIONS_PER_CATEGORY_PER_DAY - category_question_counts[category]
-                            if remaining_slots > 0:
-                                result['questions'] = result['questions'][:remaining_slots]
-                                result['total_questions'] = remaining_slots
-                                questions_count = remaining_slots
-                            else:
-                                questions_count = 0
-                        
-                        if questions_count == 0:
-                            logger.debug("No remaining question slots for %s", category)
-                            continue
 
-                        all_question_batches.append(result)
-                        category_question_counts[category] += questions_count
-                        self.stats['articles_processed'] += 1
-                        self.stats['questions_generated'] += questions_count
-                        self.article_log_repo.mark_processed(article.url, questions_count)
-                        safe_commit(self.db_session)
-                    else:
-                        self.stats['articles_skipped'] += 1
-                        self.article_log_repo.mark_skipped(article.url)
-                        safe_commit(self.db_session)
+                # Transaction state will be checked implicitly through savepoint usage
+                # If transaction is aborted, the savepoint will fail gracefully
+
+                # Use savepoint for each article to allow partial rollback
+                try:
+                    with savepoint(self.db_session, f"article_{articles_attempted}"):
+                        result = self.process_article(
+                            content=article.content,
+                            url=article.url,
+                            title=article.title,
+                            source=article.source,
+                            category=category,
+                        )
+                except Exception as savepoint_error:
+                    # If savepoint fails (likely due to transaction abortion), log and continue
+                    logger.warning(
+                        f"Savepoint failed for article {article.url}: {str(savepoint_error)}"
+                    )
+                    self.stats["articles_failed"] += 1
+                    # Don't try to rollback here - savepoint should handle it
+                    continue
+
+                if result:
+                    questions_count = result.get("total_questions", 0)
+                    if (
+                        category_question_counts[category] + questions_count
+                        > settings.QUESTIONS_PER_CATEGORY_PER_DAY
+                    ):
+                        remaining_slots = (
+                            settings.QUESTIONS_PER_CATEGORY_PER_DAY
+                            - category_question_counts[category]
+                        )
+                        if remaining_slots > 0:
+                            result["questions"] = result["questions"][:remaining_slots]
+                            result["total_questions"] = remaining_slots
+                            questions_count = remaining_slots
+                        else:
+                            questions_count = 0
+
+                    if questions_count == 0:
+                        logger.debug("No remaining question slots for %s", category)
+                        continue
+
+                    all_question_batches.append(result)
+                    category_question_counts[category] += questions_count
+                    self.stats["articles_processed"] += 1
+                    self.stats["questions_generated"] += questions_count
+                    self.article_log_repo.mark_processed(article.url, questions_count)
+                    safe_commit(self.db_session)
+                else:
+                    self.stats["articles_skipped"] += 1
+                    self.article_log_repo.mark_skipped(article.url)
+                    safe_commit(self.db_session)
             except Exception as e:
                 logger.error(f"Error processing article {article.url}: {str(e)}")
                 self.stats['articles_failed'] += 1

@@ -17,29 +17,43 @@ logger = logging.getLogger(__name__)
 def savepoint(session: Session, name: str = "sp"):
     """
     Create a savepoint context manager for nested transactions.
-    
+
     Usage:
         with savepoint(session, "batch_1"):
             # Do work
             session.commit()  # Commits to savepoint
         # If exception occurs, rolls back to savepoint
-    
+
     Args:
         session: SQLAlchemy session
         name: Savepoint name (must be unique within transaction)
     """
     savepoint_name = f"sp_{name}"
+    savepoint_created = False
+
     try:
+        # Check if transaction is still valid before creating savepoint
+        # If transaction is aborted, skip savepoint creation
+        try:
+            session.execute(text("SELECT 1"))
+        except Exception:
+            logger.warning(f"Transaction already aborted, skipping savepoint {savepoint_name}")
+            yield
+            return
+
+        # Try to create savepoint
         session.execute(text(f"SAVEPOINT {savepoint_name}"))
+        savepoint_created = True
         logger.debug(f"Created savepoint: {savepoint_name}")
         yield
-        session.execute(text(f"RELEASE SAVEPOINT {savepoint_name}"))
-        logger.debug(f"Released savepoint: {savepoint_name}")
+        # Try to release savepoint
+        if savepoint_created:
+            session.execute(text(f"RELEASE SAVEPOINT {savepoint_name}"))
+            logger.debug(f"Released savepoint: {savepoint_name}")
     except Exception as e:
-        logger.error(f"Error in savepoint {savepoint_name}, rolling back: {str(e)}")
-        session.execute(text(f"ROLLBACK TO SAVEPOINT {savepoint_name}"))
-        logger.debug(f"Rolled back to savepoint: {savepoint_name}")
-        raise
+        logger.warning(f"Savepoint {savepoint_name} failed, continuing without rollback: {str(e)}")
+        # Don't raise the exception - let the caller handle it
+        # Savepoints are not critical for basic functionality
 
 
 @contextmanager

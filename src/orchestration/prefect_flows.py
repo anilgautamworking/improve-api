@@ -32,12 +32,14 @@ def _run_coroutine_sync(coro):
         asyncio.set_event_loop(None)
 
 
-def _stats_to_markdown(title: str, stats: Dict[str, Any], errors: Optional[List[str]] = None) -> str:
+def _stats_to_markdown(
+    title: str, stats: Dict[str, Any], errors: Optional[List[str]] = None
+) -> str:
     """Render a Markdown table for Prefect artifacts."""
 
     header = ["| Metric | Value |", "| --- | --- |"]
     for key, value in stats.items():
-        display_key = key.replace('_', ' ').title()
+        display_key = key.replace("_", " ").title()
         header.append(f"| {display_key} | {value} |")
 
     markdown = f"## {title}\n\n" + "\n".join(header)
@@ -60,7 +62,6 @@ def _artifact_key(prefix: str) -> str:
     retries=max(settings.RETRY_ATTEMPTS, 0),
     retry_delay_seconds=settings.RETRY_DELAY,
     timeout_seconds=settings.PREFECT_CRAWLER_TASK_TIMEOUT,
-    task_run_name="crawl-rss-feeds-{flow_run.scheduled_start_time:%Y%m%d-%H%M%S}",
 )
 def crawl_rss_feeds_task() -> Dict[str, Any]:
     """Run stage 1 (RSS crawl) under Prefect orchestration."""
@@ -70,14 +71,18 @@ def crawl_rss_feeds_task() -> Dict[str, Any]:
 
     try:
         stats = _run_coroutine_sync(crawl_feeds.run_crawl(logger=logger))
-        
-        artifact = _stats_to_markdown("Crawler Stage", {k: v for k, v in stats.items() if k != 'errors'}, stats.get('errors'))
+
+        artifact = _stats_to_markdown(
+            "Crawler Stage",
+            {k: v for k, v in stats.items() if k != "errors"},
+            stats.get("errors"),
+        )
         create_markdown_artifact(
             key=_artifact_key("crawler-stage"),
             markdown=artifact,
             description="RSS crawling summary",
         )
-        
+
         return stats
     except Exception as e:
         logger.error(f"Crawler task failed: {str(e)}", exc_info=True)
@@ -97,7 +102,6 @@ def crawl_rss_feeds_task() -> Dict[str, Any]:
     retries=max(settings.RETRY_ATTEMPTS, 0),
     retry_delay_seconds=settings.RETRY_DELAY,
     timeout_seconds=settings.PREFECT_QUESTION_TASK_TIMEOUT,
-    task_run_name="generate-questions-{flow_run.scheduled_start_time:%Y%m%d-%H%M%S}",
 )
 def generate_questions_task() -> Dict[str, Any]:
     """Run stage 2 (question generation + persistence) under Prefect."""
@@ -107,18 +111,20 @@ def generate_questions_task() -> Dict[str, Any]:
 
     try:
         results = generate_questions.run_generation(logger=logger)
-        question_stats = results.get('question_stats', {})
+        question_stats = results.get("question_stats", {})
         combined_stats = {
-            'articles_processed': question_stats.get('articles_processed', 0),
-            'articles_skipped': question_stats.get('articles_skipped', 0),
-            'articles_failed': question_stats.get('articles_failed', 0),
-            'questions_generated': question_stats.get('questions_generated', 0),
-            'saved_batches': results.get('saved_batches', 0),
-            'frontend_saved': results.get('frontend_saved', 0),
-            'frontend_skipped': results.get('frontend_skipped', 0),
+            "articles_processed": question_stats.get("articles_processed", 0),
+            "articles_skipped": question_stats.get("articles_skipped", 0),
+            "articles_failed": question_stats.get("articles_failed", 0),
+            "questions_generated": question_stats.get("questions_generated", 0),
+            "saved_batches": results.get("saved_batches", 0),
+            "frontend_saved": results.get("frontend_saved", 0),
+            "frontend_skipped": results.get("frontend_skipped", 0),
         }
 
-        artifact = _stats_to_markdown("Question Generation Stage", combined_stats, question_stats.get('errors'))
+        artifact = _stats_to_markdown(
+            "Question Generation Stage", combined_stats, question_stats.get("errors")
+        )
         create_markdown_artifact(
             key=_artifact_key("question-stage"),
             markdown=artifact,
@@ -129,7 +135,9 @@ def generate_questions_task() -> Dict[str, Any]:
     except Exception as e:
         logger.error(f"Question generation task failed: {str(e)}", exc_info=True)
         # Create error artifact
-        error_artifact = _stats_to_markdown("Question Generation Stage - Failed", {}, [str(e)])
+        error_artifact = _stats_to_markdown(
+            "Question Generation Stage - Failed", {}, [str(e)]
+        )
         create_markdown_artifact(
             key=_artifact_key("question-stage-error"),
             markdown=error_artifact,
@@ -146,11 +154,15 @@ def daily_question_bank_flow(
     """Prefect flow that coordinates crawler + question generation stages."""
 
     logger = get_run_logger()
-    
+
     # Initialize graceful shutdown handler
     shutdown_handler = init_graceful_shutdown()
-    
-    logger.info("Prefect flow started. run_crawler=%s run_question_generation=%s", run_crawler, run_question_generation)
+
+    logger.info(
+        "Prefect flow started. run_crawler=%s run_question_generation=%s",
+        run_crawler,
+        run_question_generation,
+    )
 
     crawler_stats: Optional[Dict[str, Any]] = None
     question_results: Optional[Dict[str, Any]] = None
@@ -177,18 +189,22 @@ def daily_question_bank_flow(
 
     summary_stats: Dict[str, Any] = {}
     if crawler_stats:
-        summary_stats.update({
-            'feeds_processed': crawler_stats.get('feeds_processed', 0),
-            'articles_fetched': crawler_stats.get('articles_fetched', 0),
-            'articles_stored': crawler_stats.get('articles_stored', 0),
-        })
+        summary_stats.update(
+            {
+                "feeds_processed": crawler_stats.get("feeds_processed", 0),
+                "articles_fetched": crawler_stats.get("articles_fetched", 0),
+                "articles_stored": crawler_stats.get("articles_stored", 0),
+            }
+        )
     if question_results:
-        q_stats = question_results.get('question_stats', {})
-        summary_stats.update({
-            'articles_processed': q_stats.get('articles_processed', 0),
-            'questions_generated': q_stats.get('questions_generated', 0),
-            'batches_saved': question_results.get('saved_batches', 0),
-        })
+        q_stats = question_results.get("question_stats", {})
+        summary_stats.update(
+            {
+                "articles_processed": q_stats.get("articles_processed", 0),
+                "questions_generated": q_stats.get("questions_generated", 0),
+                "batches_saved": question_results.get("saved_batches", 0),
+            }
+        )
 
     if summary_stats:
         artifact = _stats_to_markdown("Overall Pipeline Summary", summary_stats)
@@ -200,8 +216,8 @@ def daily_question_bank_flow(
 
     logger.info("Prefect flow finished")
     return {
-        'crawler_stats': crawler_stats,
-        'question_generation': question_results,
+        "crawler_stats": crawler_stats,
+        "question_generation": question_results,
     }
 
 

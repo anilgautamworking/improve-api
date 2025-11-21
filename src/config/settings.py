@@ -341,7 +341,13 @@ class Settings:
         ]
 
         feeds = []
+        enabled_categories = cls.get_enabled_categories()
+
         for source, category, urls_value in feed_definitions:
+            # Skip feeds for disabled categories (only filter if specific categories are enabled)
+            if enabled_categories and category not in enabled_categories:
+                continue
+
             config = cls._build_feed_config(source, category, urls_value)
             if config:
                 feeds.append(config)

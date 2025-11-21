@@ -75,7 +75,9 @@ def save_question_batches(question_batches, logger):
 def run_generation(logger=None) -> dict:
     """Process pending articles and generate questions."""
     logger = logger or setup_logging()
+    logger.info("Initializing question generation pipeline...")
     settings.validate()
+    logger.info("Settings validated, creating orchestrator...")
 
     with PipelineOrchestrator() as orchestrator:
         question_batches = orchestrator.process_articles_from_db()

@@ -27,11 +27,14 @@ class OpenAIClient:
             temperature: Sampling temperature (0.0 to 2.0)
             max_tokens: Maximum tokens in response
         """
+        logger.info("Initializing OpenAI client...")
         self.api_key = api_key or os.getenv("OPENAI_API_KEY")
         if not self.api_key:
             raise ValueError("OpenAI API key not provided. Set OPENAI_API_KEY environment variable.")
-        
+
+        logger.info("Creating OpenAI API client...")
         self.client = OpenAI(api_key=self.api_key)
+        logger.info("OpenAI client initialized successfully")
         self.model = model or os.getenv("OPENAI_MODEL", "gpt-4")
         self.temperature = float(os.getenv("OPENAI_TEMPERATURE", temperature))
         self.max_tokens = int(os.getenv("OPENAI_MAX_TOKENS", max_tokens))
