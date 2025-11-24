@@ -9,6 +9,7 @@ Goals:
 3. Keep each question self-contained with four complete options (A-D) and a short explanation referencing the key fact.
 4. Respond with strict JSON only (no prose, no markdown).
 5. If the article is not useful for competitive exams, return {"status": "No relevant content"}.
+6. Assign a difficulty label per question: easy (direct recall with clear clue), medium (multi-step recall or mild inference), hard (multi-step reasoning/derivation/comparison).
 """
 
 # User prompt template - simple version
@@ -23,6 +24,7 @@ Each question must:
 - Be self-contained and understandable without the article.
 - Have options labelled A-D with full statements.
 - Include the correct option letter and a one-sentence explanation citing the relevant fact.
+- Include a difficulty field (easy/medium/hard) based on cognitive effort.
 
 Return JSON exactly in this structure:
 {{
@@ -40,7 +42,8 @@ Return JSON exactly in this structure:
         "D. <option 4>"
       ],
       "answer": "<A/B/C/D>",
-      "explanation": "<short justification>"
+      "explanation": "<short justification>",
+      "difficulty": "<easy|medium|hard>"
     }}
   ]
 }}
@@ -58,6 +61,7 @@ Goals:
 3. Keep each question self-contained with four complete options (A-D) and a short explanation referencing the key fact/derivation/relationship.
 4. Respond with strict JSON only (no prose, no markdown).
 5. If the content is not useful for competitive exams, return {"status": "No relevant content"}.
+6. Assign a difficulty label per question: easy (direct recall with clear clue), medium (multi-step recall or mild inference), hard (multi-step reasoning/derivation/comparison).
 """
 
 # PDF user prompt template with heading/page context
@@ -73,6 +77,7 @@ Each question must:
 - Be self-contained and understandable without the text.
 - Have options labelled A-D with full statements.
 - Include the correct option letter and a one-sentence explanation citing the relevant fact.
+- Include a difficulty field (easy/medium/hard) based on cognitive effort.
 
 Return JSON exactly in this structure:
 {{
@@ -90,7 +95,8 @@ Return JSON exactly in this structure:
         "D. <option 4>"
       ],
       "answer": "<A/B/C/D>",
-      "explanation": "<short justification>"
+      "explanation": "<short justification>",
+      "difficulty": "<easy|medium|hard>"
     }}
   ]
 }}

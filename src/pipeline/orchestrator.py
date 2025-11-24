@@ -6,6 +6,9 @@ from typing import List, Dict, Optional
 from sqlalchemy import text
 from src.database.repositories.article_repository import ArticleRepository
 from src.database.repositories.question_repository import QuestionRepository
+from src.database.repositories.frontend_question_repository import FrontendQuestionRepository
+from src.database.repositories.pdf_source_repository import PdfSourceRepository
+from src.database.repositories.pdf_chunk_repository import PdfChunkRepository
 from src.database.repositories.article_log_repository import ArticleLogRepository
 from src.database.db import SessionLocal
 from src.generators.question_generator import QuestionGenerator
@@ -38,6 +41,10 @@ class PipelineOrchestrator:
         self.article_repo = ArticleRepository(self.db_session)
         self.article_log_repo = ArticleLogRepository(self.db_session)
         self.question_generator = question_generator or QuestionGenerator()
+        self.question_repo = QuestionRepository(self.db_session)
+        self.frontend_question_repo = FrontendQuestionRepository(self.db_session)
+        self.pdf_source_repo = PdfSourceRepository(self.db_session)
+        self.pdf_chunk_repo = PdfChunkRepository(self.db_session)
         self.pdf_parser = PDFParser()
         self.pdf_chunker = PdfChunker(
             chunk_size_pages=settings.PDF_CHUNK_SIZE_PAGES,
@@ -299,7 +306,7 @@ class PipelineOrchestrator:
         return questions_data
 
     def process_pdf(self, pdf_path: str, source: str = "PDF", 
-                   category: Optional[str] = None) -> Optional[Dict]:
+                   category: Optional[str] = None, pdf_source_id: Optional[int] = None) -> Optional[Dict]:
         """
         Process PDF document and generate questions
         
@@ -318,15 +325,21 @@ class PipelineOrchestrator:
             pages = self.pdf_parser.extract_pages(pdf_path)
             if not pages:
                 logger.warning(f"Failed to extract pages from PDF: {pdf_path}")
+                if pdf_source_id:
+                    self.pdf_source_repo.update_status(pdf_source_id, "failed", error_reason="extract_pages_failed")
                 return None
 
             full_text = "\n\n".join([p.text for p in pages if p.text])
             if not full_text or len(full_text.strip()) < 100:
                 logger.warning(f"Insufficient content in PDF: {pdf_path}")
+                if pdf_source_id:
+                    self.pdf_source_repo.update_status(pdf_source_id, "failed", error_reason="no_content")
                 return None
 
             if not is_relevant_content(full_text):
                 logger.info(f"PDF content not relevant for exam prep: {pdf_path}")
+                if pdf_source_id:
+                    self.pdf_source_repo.update_status(pdf_source_id, "failed", error_reason="not_relevant")
                 return None
 
             if not category:
@@ -335,7 +348,34 @@ class PipelineOrchestrator:
             chunks = self.pdf_chunker.chunk(pages)
             if not chunks:
                 logger.warning(f"No chunks produced for PDF: {pdf_path}")
+                if pdf_source_id:
+                    self.pdf_source_repo.update_status(pdf_source_id, "failed", error_reason="no_chunks")
                 return None
+
+            # Persist chunk records
+            persisted_chunks = []
+            for chunk in chunks:
+                try:
+                    rec = self.pdf_chunk_repo.upsert_chunk(
+                        pdf_source_id=pdf_source_id or -1,
+                        chunk_index=chunk.index,
+                        page_start=chunk.page_start,
+                        page_end=chunk.page_end,
+                        chapter_title=None,
+                        heading=chunk.heading,
+                        content=chunk.content,
+                        token_count=chunk.token_estimate,
+                        status="processing",
+                    )
+                    persisted_chunks.append(rec)
+                except Exception as exc:
+                    logger.warning(
+                        "Failed to upsert chunk %s for %s (pdf_source_id=%s): %s",
+                        chunk.index,
+                        pdf_path,
+                        pdf_source_id,
+                        exc,
+                    )
 
             target_max = (
                 settings.PDF_TARGET_QUESTIONS_PER_CHUNK
@@ -345,6 +385,7 @@ class PipelineOrchestrator:
             date = datetime.now().strftime('%Y-%m-%d')
             all_questions: List[Dict] = []
 
+            chunk_meta = []
             for chunk in chunks:
                 honor_prefect_signals("PDF chunk generation")
                 if not chunk.content or len(chunk.content.strip()) < 100:
@@ -394,21 +435,38 @@ class PipelineOrchestrator:
 
                 if not questions:
                     logger.info(
-                        "No questions for chunk %s (%s-%s) in %s",
+                        "No questions for chunk %s (%s-%s) in %s (pdf_source_id=%s)",
                         chunk.index,
                         chunk.page_start,
                         chunk.page_end,
                         pdf_path,
+                        pdf_source_id,
                     )
+                    if pdf_source_id:
+                        rec = self.pdf_chunk_repo.get_by_source_and_index(pdf_source_id, chunk.index)
+                        if rec:
+                            self.pdf_chunk_repo.update_status(rec.id, "failed", error_reason="no_questions")
                     continue
 
+                if pdf_source_id:
+                    rec = self.pdf_chunk_repo.get_by_source_and_index(pdf_source_id, chunk.index)
+                    if rec:
+                        self.pdf_chunk_repo.update_status(rec.id, "done", error_reason=None)
+
+                chunk_meta.append({
+                    "chunk_index": chunk.index,
+                    "page_start": chunk.page_start,
+                    "page_end": chunk.page_end,
+                    "heading": chunk.heading,
+                    "question_count": len(questions),
+                })
                 all_questions.extend(questions)
 
             if not all_questions:
                 logger.info(f"No questions generated for PDF: {pdf_path}")
                 return None
 
-            return {
+            result = {
                 "source": source,
                 "category": category,
                 "date": date,
@@ -416,9 +474,36 @@ class PipelineOrchestrator:
                 "total_questions": len(all_questions),
                 "meta": {
                     "pdf_path": pdf_path,
+                    "pdf_source_id": pdf_source_id,
                     "chunks": len(chunks),
+                    "chunk_meta": chunk_meta,
                 },
             }
+
+            # Persist to daily_questions and frontend questions
+            try:
+                saved = self.question_repo.save_questions(result)
+                if saved and pdf_source_id:
+                    self.pdf_source_repo.update_status(pdf_source_id, "done", error_reason=None)
+            except Exception as exc:
+                logger.warning(
+                    "Failed to save PDF questions to daily_questions (pdf_source_id=%s): %s",
+                    pdf_source_id,
+                    exc,
+                )
+                if pdf_source_id:
+                    self.pdf_source_repo.update_status(pdf_source_id, "failed", error_reason=str(exc))
+
+            try:
+                self.frontend_question_repo.save_questions_to_frontend_table(result, check_duplicates=True)
+            except Exception as exc:
+                logger.warning(
+                    "Failed to save PDF questions to frontend table (pdf_source_id=%s): %s",
+                    pdf_source_id,
+                    exc,
+                )
+
+            return result
 
         except Exception as e:
             logger.error(f"Error processing PDF {pdf_path}: {str(e)}")

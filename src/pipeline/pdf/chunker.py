@@ -27,6 +27,7 @@ class PdfChunk:
     heading: Optional[str]
     content: str
     question_density: float
+    token_estimate: int
 
 
 class PdfChunker:
@@ -82,6 +83,7 @@ class PdfChunker:
             heading = guess_heading(window[0].text)
             truncated = truncate_at_sentence(joined, self.max_content_chars, self.hard_cap)
             density = question_signal_density(truncated)
+            token_estimate = len(truncated) // 4
 
             chunk = PdfChunk(
                 index=chunk_index,
@@ -90,6 +92,7 @@ class PdfChunker:
                 heading=heading,
                 content=truncated,
                 question_density=density,
+                token_estimate=token_estimate,
             )
             chunks.append(chunk)
 
