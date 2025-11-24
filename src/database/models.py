@@ -1,10 +1,88 @@
 """SQLAlchemy database models"""
 
-from sqlalchemy import Column, Integer, String, DateTime, Text, JSON, ForeignKey, Index, UniqueConstraint
+from sqlalchemy import (
+    Column,
+    Integer,
+    String,
+    DateTime,
+    Text,
+    JSON,
+    ForeignKey,
+    Index,
+    UniqueConstraint,
+    Boolean,
+)
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.sql import func, text
 from sqlalchemy.orm import relationship
 from src.database.db import Base
+
+
+class PdfSource(Base):
+    """Tracks PDF inputs (local ZIPs or Drive files)."""
+
+    __tablename__ = "pdf_sources"
+
+    id = Column(Integer, primary_key=True, index=True)
+    drive_file_id = Column(String(255), nullable=True, unique=True)
+    file_name = Column(String(255), nullable=False)
+    zip_name = Column(String(255), nullable=True)
+    local_path = Column(String(500), nullable=False, unique=True)
+    etag_hash = Column(String(128), nullable=True)
+    subject = Column(String(100), nullable=True, index=True)
+    grade = Column(String(50), nullable=True, index=True)
+    book_title = Column(String(255), nullable=True)
+    source_type = Column(String(50), nullable=False, default="local_zip", index=True)
+    status = Column(String(50), nullable=False, default="pending", index=True)  # pending/processing/done/failed
+    total_pages = Column(Integer, nullable=True)
+    processed_at = Column(DateTime(timezone=True), nullable=True)
+    error_reason = Column(Text, nullable=True)
+    retry_count = Column(Integer, nullable=False, default=0)
+    ocr_used = Column(Boolean, nullable=False, default=False)
+    created_at = Column(DateTime(timezone=True), server_default=func.now(), nullable=False)
+    updated_at = Column(DateTime(timezone=True), onupdate=func.now())
+
+    chunks = relationship("PdfChunk", back_populates="source", cascade="all, delete-orphan")
+
+    __table_args__ = (
+        Index("idx_pdf_sources_status", "status"),
+        Index("idx_pdf_sources_source_type", "source_type"),
+        Index("idx_pdf_sources_subject_grade", "subject", "grade"),
+        Index("idx_pdf_sources_etag", "etag_hash"),
+    )
+
+    def __repr__(self):
+        return f"<PdfSource(id={self.id}, path={self.local_path}, status={self.status})>"
+
+
+class PdfChunk(Base):
+    """Stores chunked text spans from a PDF."""
+
+    __tablename__ = "pdf_chunks"
+
+    id = Column(Integer, primary_key=True, index=True)
+    pdf_source_id = Column(Integer, ForeignKey("pdf_sources.id", ondelete="CASCADE"), nullable=False, index=True)
+    chunk_index = Column(Integer, nullable=False)
+    page_start = Column(Integer, nullable=False)
+    page_end = Column(Integer, nullable=False)
+    chapter_title = Column(String(255), nullable=True)
+    heading = Column(String(255), nullable=True)
+    content = Column(Text, nullable=False)
+    token_count = Column(Integer, nullable=True, default=0)
+    status = Column(String(50), nullable=False, default="pending", index=True)  # pending/processing/done/failed
+    error_reason = Column(Text, nullable=True)
+    created_at = Column(DateTime(timezone=True), server_default=func.now(), nullable=False)
+    updated_at = Column(DateTime(timezone=True), onupdate=func.now())
+
+    source = relationship("PdfSource", back_populates="chunks")
+
+    __table_args__ = (
+        UniqueConstraint("pdf_source_id", "chunk_index", name="uq_pdf_chunk_source_index"),
+        Index("idx_pdf_chunks_status", "status"),
+    )
+
+    def __repr__(self):
+        return f"<PdfChunk(id={self.id}, source_id={self.pdf_source_id}, idx={self.chunk_index})>"
 
 
 class DailyQuestion(Base):
