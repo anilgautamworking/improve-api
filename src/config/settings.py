@@ -27,6 +27,22 @@ def _int_setting(name: str, default: int) -> int:
         raise ValueError(f"Invalid integer value for {name}: '{value}'") from exc
 
 
+def _bool_setting(name: str, default: bool) -> bool:
+    """Safely parse boolean environment variables."""
+
+    value = os.getenv(name)
+    if value is None:
+        return default
+
+    value = value.strip().lower()
+    if value in ("1", "true", "yes", "on"):
+        return True
+    if value in ("0", "false", "no", "off", ""):
+        return False
+
+    raise ValueError(f"Invalid boolean value for {name}: '{value}'")
+
+
 class Settings:
     """Application settings loaded from environment variables"""
 
@@ -49,6 +65,7 @@ class Settings:
     OLLAMA_BASE_URL = os.getenv("OLLAMA_BASE_URL", "http://localhost:11434")
     OLLAMA_MODEL = os.getenv("OLLAMA_MODEL", "myaniu/qwen2.5-1m:14b")
     OLLAMA_TEMPERATURE = float(os.getenv("OLLAMA_TEMPERATURE", "0.7"))
+    OLLAMA_REQUEST_TIMEOUT = _int_setting("OLLAMA_REQUEST_TIMEOUT", 300)
 
     # Logging
     LOG_LEVEL = os.getenv("LOG_LEVEL", "INFO")
@@ -174,6 +191,28 @@ class Settings:
     RETRY_ATTEMPTS = _int_setting("RETRY_ATTEMPTS", 3)
     RETRY_DELAY = _int_setting("RETRY_DELAY", 5)
 
+    # PDF Pipeline Configuration
+    PDF_BASE_DIR = os.getenv("PDF_BASE_DIR", "data/pdfs")
+    PDF_DOWNLOAD_TMP_DIR = os.getenv(
+        "PDF_DOWNLOAD_TMP_DIR",
+        os.path.join(PDF_BASE_DIR, "tmp")
+    )
+    PDF_CHUNK_SIZE_PAGES = _int_setting("PDF_CHUNK_SIZE_PAGES", 6)
+    PDF_CHUNK_OVERLAP_PAGES = _int_setting("PDF_CHUNK_OVERLAP_PAGES", 1)
+    PDF_ENABLE_OCR = _bool_setting("PDF_ENABLE_OCR", False)
+    # Soft target; 0 means no target enforced. Falls back to legacy PDF_QUESTIONS_PER_CHUNK if set.
+    _legacy_pdf_q_target = os.getenv("PDF_QUESTIONS_PER_CHUNK")
+    if _legacy_pdf_q_target is not None and os.getenv("PDF_TARGET_QUESTIONS_PER_CHUNK") is None:
+        PDF_TARGET_QUESTIONS_PER_CHUNK = _int_setting("PDF_QUESTIONS_PER_CHUNK", 6)
+    else:
+        PDF_TARGET_QUESTIONS_PER_CHUNK = _int_setting("PDF_TARGET_QUESTIONS_PER_CHUNK", 6)
+    # Soft ceiling; content is truncated at sentence boundaries near this value.
+    PDF_MAX_CONTENT_CHARS = _int_setting("PDF_MAX_CONTENT_CHARS", 12000)
+    PDF_MODEL = os.getenv(
+        "PDF_MODEL",
+        OPENAI_MODEL if AI_PROVIDER == "openai" else OLLAMA_MODEL
+    )
+
     # Prefect Task Timeouts (in seconds)
     PREFECT_CRAWLER_TASK_TIMEOUT = _int_setting(
         "PREFECT_CRAWLER_TASK_TIMEOUT", 3600
@@ -283,6 +322,32 @@ class Settings:
         valid_sources = {name.lower() for name in cls.get_pdf_sources()}
         return source.lower() in valid_sources
 
+    @classmethod
+    def _validate_pdf_settings(cls) -> None:
+        """Validate PDF pipeline settings and ensure directories exist."""
+
+        if cls.PDF_CHUNK_SIZE_PAGES <= 0:
+            raise ValueError("PDF_CHUNK_SIZE_PAGES must be greater than 0")
+        if cls.PDF_CHUNK_OVERLAP_PAGES < 0:
+            raise ValueError("PDF_CHUNK_OVERLAP_PAGES cannot be negative")
+        if cls.PDF_CHUNK_OVERLAP_PAGES >= cls.PDF_CHUNK_SIZE_PAGES:
+            raise ValueError(
+                "PDF_CHUNK_OVERLAP_PAGES must be smaller than PDF_CHUNK_SIZE_PAGES"
+            )
+        if cls.PDF_TARGET_QUESTIONS_PER_CHUNK < 0:
+            raise ValueError("PDF_TARGET_QUESTIONS_PER_CHUNK cannot be negative")
+        if cls.PDF_MAX_CONTENT_CHARS <= 0:
+            raise ValueError("PDF_MAX_CONTENT_CHARS must be greater than 0")
+        if not cls.PDF_MODEL:
+            raise ValueError("PDF_MODEL cannot be empty")
+
+        for path in {cls.PDF_BASE_DIR, cls.PDF_DOWNLOAD_TMP_DIR}:
+            if not path:
+                raise ValueError("PDF_BASE_DIR and PDF_DOWNLOAD_TMP_DIR cannot be empty")
+            os.makedirs(path, exist_ok=True)
+            if not os.path.isdir(path):
+                raise ValueError(f"Path is not a directory: {path}")
+
     @staticmethod
     def _parse_feed_urls(value: str) -> List[str]:
         """Parse comma or newline separated feed URLs into a list"""
@@ -385,6 +450,8 @@ class Settings:
 
         if not cls.DATABASE_URL:
             raise ValueError("DATABASE_URL is required")
+
+        cls._validate_pdf_settings()
         return True
 
 

@@ -65,3 +65,5 @@ temp/
 
 *.md
 !README.md
+*.pdf
+*.zip

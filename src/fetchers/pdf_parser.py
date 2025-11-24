@@ -4,6 +4,7 @@ import pdfplumber
 from typing import Optional, Dict, List
 import logging
 import os
+from src.pipeline.pdf.chunker import PdfPage
 
 logger = logging.getLogger(__name__)
 
@@ -65,6 +66,35 @@ class PDFParser:
                 
         except Exception as e:
             logger.error(f"Error parsing PDF {pdf_path}: {str(e)}")
+            return None
+
+    def extract_pages(self, pdf_path: str) -> Optional[List[PdfPage]]:
+        """
+        Extract text per page for chunking.
+
+        Args:
+            pdf_path: Path to PDF file
+
+        Returns:
+            List of PdfPage entries or None on failure.
+        """
+        if not os.path.exists(pdf_path):
+            logger.error(f"PDF file not found: {pdf_path}")
+            return None
+
+        pages: List[PdfPage] = []
+        try:
+            with pdfplumber.open(pdf_path) as pdf:
+                for page_num, page in enumerate(pdf.pages, start=1):
+                    try:
+                        text = page.extract_text() or ""
+                    except Exception as e:
+                        logger.warning(f"Error extracting text from page {page_num}: {str(e)}")
+                        text = ""
+                    pages.append(PdfPage(page_number=page_num, text=text))
+            return pages
+        except Exception as e:
+            logger.error(f"Error extracting pages for PDF {pdf_path}: {str(e)}")
             return None
 
     def _extract_title(self, pdf) -> Optional[str]:
@@ -195,4 +225,3 @@ class PDFParser:
             logger.error(f"Error extracting tables from PDF {pdf_path}: {str(e)}")
         
         return tables
-

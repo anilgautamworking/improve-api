@@ -7,7 +7,11 @@ from typing import Optional, Dict, List, Union
 from datetime import datetime
 from src.ai.openai_client import OpenAIClient
 from src.ai.ollama_client import OllamaClient
-from src.generators.mcq_prompts import SYSTEM_PROMPT, build_prompt
+from src.generators.mcq_prompts import (
+    SYSTEM_PROMPT,
+    PROMPT_PROFILES,
+    build_prompt,
+)
 from src.orchestration.cancellation import honor_prefect_signals
 from src.utils.content_cleaner import clean_text, extract_relevant_sections
 
@@ -55,8 +59,19 @@ class QuestionGenerator:
         self.max_questions = settings.QUESTION_COUNT_MAX  # Per article
         self.max_content_length = settings.ARTICLE_CONTEXT_MAX_CHARS
 
-    def generate_questions(self, source: str, category: str, content: str, 
-                          date: Optional[str] = None) -> Optional[Dict]:
+    def generate_questions(
+        self,
+        source: str,
+        category: str,
+        content: str,
+        date: Optional[str] = None,
+        target_min_questions: Optional[int] = None,
+        target_max_questions: Optional[int] = None,
+        max_content_length_override: Optional[int] = None,
+        prompt_profile: str = "default",
+        chunk_heading: Optional[str] = None,
+        page_range: Optional[str] = None,
+    ) -> Optional[Dict]:
         """
         Generate MCQs from article content
         
@@ -65,6 +80,12 @@ class QuestionGenerator:
             category: Article category (Business, Economy, etc.)
             content: Article content text
             date: Article date (YYYY-MM-DD), defaults to today
+            target_min_questions: optional soft minimum to steer generation
+            target_max_questions: optional soft maximum to steer generation
+            max_content_length_override: optional content length cap (chars)
+            prompt_profile: which prompt profile to use ("default" or "pdf")
+            chunk_heading: optional heading/context for PDF chunks
+            page_range: optional page range context for PDF chunks
             
         Returns:
             Dictionary with questions in JSON format or None on failure
@@ -81,8 +102,9 @@ class QuestionGenerator:
             return {"status": "No relevant content"}
         
         # Truncate content to save tokens (keep first N characters)
-        if self.max_content_length > 0 and len(relevant_content) > self.max_content_length:
-            relevant_content = relevant_content[:self.max_content_length]
+        max_len = max_content_length_override or self.max_content_length
+        if max_len > 0 and len(relevant_content) > max_len:
+            relevant_content = relevant_content[:max_len]
             logger.debug(
                 "Truncated content from %s to %s characters",
                 len(content),
@@ -91,14 +113,37 @@ class QuestionGenerator:
         
         # Build prompt
         honor_prefect_signals("Question generation - prompt build")
-        prompt = build_prompt(source, category, date, relevant_content)
+        t_min = target_min_questions if target_min_questions is not None else self.min_questions
+        t_max = target_max_questions if target_max_questions is not None else self.max_questions
+
+        profile = prompt_profile or "default"
+        prompt_def = PROMPT_PROFILES.get(
+            profile,
+            PROMPT_PROFILES["default"],
+        )
+        system_prompt = prompt_def["system"]
+        builder = prompt_def["builder"]
+
+        if profile == "pdf":
+            prompt = builder(
+                source,
+                category,
+                date,
+                relevant_content,
+                t_min,
+                t_max,
+                heading=chunk_heading,
+                page_range=page_range,
+            )
+        else:
+            prompt = builder(source, category, date, relevant_content, t_min, t_max)
         
         # Generate questions via AI client (OpenAI or Ollama)
         logger.info(f"Generating questions for {source} - {category}")
         honor_prefect_signals("Question generation - llm call")
         response_text = self.client.generate_completion(
             prompt=prompt,
-            system_prompt=SYSTEM_PROMPT
+            system_prompt=system_prompt
         )
         honor_prefect_signals("Question generation - parsing")
         

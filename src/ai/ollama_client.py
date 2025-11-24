@@ -7,6 +7,7 @@ import logging
 import time
 from dotenv import load_dotenv
 from src.utils.circuit_breaker import CircuitBreaker, CircuitBreakerOpenError
+from src.config.settings import settings
 
 load_dotenv()
 
@@ -29,7 +30,8 @@ class OllamaClient:
 
     def __init__(self, base_url: str = "http://localhost:11434", 
                  model: str = "myaniu/qwen2.5-1m:14b",
-                 temperature: float = 0.7):
+                 temperature: float = 0.7,
+                 request_timeout: Optional[int] = None):
         """
         Initialize Ollama client
         
@@ -37,10 +39,14 @@ class OllamaClient:
             base_url: Ollama API base URL (default: http://localhost:11434)
             model: Model name to use (default: myaniu/qwen2.5-1m:14b)
             temperature: Sampling temperature (0.0 to 2.0)
+            request_timeout: Optional override for request timeout in seconds
         """
         self.base_url = base_url or os.getenv("OLLAMA_BASE_URL", "http://localhost:11434")
         self.model = model or os.getenv("OLLAMA_MODEL", "llama3.1:8b")
         self.temperature = float(os.getenv("OLLAMA_TEMPERATURE", temperature))
+        self.request_timeout = (
+            request_timeout if request_timeout is not None else settings.OLLAMA_REQUEST_TIMEOUT
+        )
         
         # Verify Ollama is running
         if not self._check_ollama_running():
@@ -139,7 +145,7 @@ class OllamaClient:
                             },
                             "stream": False
                         },
-                        timeout=180  # 2 minute timeout
+                        timeout=self.request_timeout
                     )
                     response.raise_for_status()
                     return response.json()

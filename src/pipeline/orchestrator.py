@@ -12,6 +12,8 @@ from src.generators.question_generator import QuestionGenerator
 from src.utils.filters import is_relevant_content, classify_category
 from src.utils.article_scorer import ArticleScorer
 from src.fetchers.pdf_parser import PDFParser
+from src.pipeline.pdf.chunker import PdfChunker
+from src.pipeline.pdf.text_utils import truncate_at_sentence
 from src.config.settings import settings
 from src.orchestration.cancellation import honor_prefect_signals
 from src.utils.transaction_manager import savepoint, safe_commit
@@ -37,6 +39,11 @@ class PipelineOrchestrator:
         self.article_log_repo = ArticleLogRepository(self.db_session)
         self.question_generator = question_generator or QuestionGenerator()
         self.pdf_parser = PDFParser()
+        self.pdf_chunker = PdfChunker(
+            chunk_size_pages=settings.PDF_CHUNK_SIZE_PAGES,
+            overlap_pages=settings.PDF_CHUNK_OVERLAP_PAGES,
+            max_content_chars=settings.PDF_MAX_CONTENT_CHARS,
+        )
         
         # Statistics
         self.stats = {
@@ -307,48 +314,112 @@ class PipelineOrchestrator:
         try:
             honor_prefect_signals("PDF question generation")
             logger.info(f"Processing PDF: {pdf_path}")
-            
-            # Parse PDF
-            pdf_data = self.pdf_parser.parse_pdf(pdf_path, source)
-            
-            if not pdf_data:
-                logger.warning(f"Failed to parse PDF: {pdf_path}")
+
+            pages = self.pdf_parser.extract_pages(pdf_path)
+            if not pages:
+                logger.warning(f"Failed to extract pages from PDF: {pdf_path}")
                 return None
-            
-            content = pdf_data.get('content', '')
-            if not content or len(content.strip()) < 100:
+
+            full_text = "\n\n".join([p.text for p in pages if p.text])
+            if not full_text or len(full_text.strip()) < 100:
                 logger.warning(f"Insufficient content in PDF: {pdf_path}")
                 return None
-            
-            # Check relevance
-            if not is_relevant_content(content):
+
+            if not is_relevant_content(full_text):
                 logger.info(f"PDF content not relevant for exam prep: {pdf_path}")
                 return None
-            
-            # Classify category if not provided
+
             if not category:
-                category = classify_category(content, pdf_data.get('title', ''))
-            
-            # Generate questions
-            date = datetime.now().strftime('%Y-%m-%d')
-            honor_prefect_signals("PDF question generation")
-            questions_data = self.question_generator.generate_questions(
-                source=source,
-                category=category,
-                content=content,
-                date=date
+                category = classify_category(full_text, os.path.basename(pdf_path))
+
+            chunks = self.pdf_chunker.chunk(pages)
+            if not chunks:
+                logger.warning(f"No chunks produced for PDF: {pdf_path}")
+                return None
+
+            target_max = (
+                settings.PDF_TARGET_QUESTIONS_PER_CHUNK
+                if settings.PDF_TARGET_QUESTIONS_PER_CHUNK > 0
+                else None
             )
-            
-            if not questions_data or questions_data.get("status") == "No relevant content":
+            date = datetime.now().strftime('%Y-%m-%d')
+            all_questions: List[Dict] = []
+
+            for chunk in chunks:
+                honor_prefect_signals("PDF chunk generation")
+                if not chunk.content or len(chunk.content.strip()) < 100:
+                    logger.debug(
+                        "Skipping chunk %s (%s-%s) due to low content",
+                        chunk.index,
+                        chunk.page_start,
+                        chunk.page_end,
+                    )
+                    continue
+
+                q_data = self.question_generator.generate_questions(
+                    source=source,
+                    category=category,
+                    content=chunk.content,
+                    date=date,
+                    target_min_questions=0,
+                    target_max_questions=target_max,
+                    max_content_length_override=settings.PDF_MAX_CONTENT_CHARS,
+                    prompt_profile="pdf",
+                    chunk_heading=chunk.heading,
+                    page_range=f"{chunk.page_start}-{chunk.page_end}",
+                )
+
+                questions = q_data.get("questions", []) if q_data else []
+
+                # Retry once if we got zero questions
+                if not questions:
+                    fallback_content = truncate_at_sentence(
+                        chunk.content,
+                        max(5000, settings.PDF_MAX_CONTENT_CHARS // 2),
+                        settings.PDF_MAX_CONTENT_CHARS,
+                    )
+                    q_data = self.question_generator.generate_questions(
+                        source=source,
+                        category=category,
+                        content=fallback_content,
+                        date=date,
+                        target_min_questions=0,
+                        target_max_questions=1 if target_max else None,
+                        max_content_length_override=settings.PDF_MAX_CONTENT_CHARS,
+                        prompt_profile="pdf",
+                        chunk_heading=chunk.heading,
+                        page_range=f"{chunk.page_start}-{chunk.page_end}",
+                    )
+                    questions = q_data.get("questions", []) if q_data else []
+
+                if not questions:
+                    logger.info(
+                        "No questions for chunk %s (%s-%s) in %s",
+                        chunk.index,
+                        chunk.page_start,
+                        chunk.page_end,
+                        pdf_path,
+                    )
+                    continue
+
+                all_questions.extend(questions)
+
+            if not all_questions:
                 logger.info(f"No questions generated for PDF: {pdf_path}")
                 return None
 
-            filtered_questions = questions_data.get("questions", [])
-            questions_data["questions"] = filtered_questions
-            questions_data["total_questions"] = len(filtered_questions)
-            
-            return questions_data
-            
+            return {
+                "source": source,
+                "category": category,
+                "date": date,
+                "questions": all_questions,
+                "total_questions": len(all_questions),
+                "meta": {
+                    "pdf_path": pdf_path,
+                    "chunks": len(chunks),
+                },
+            }
+
         except Exception as e:
             logger.error(f"Error processing PDF {pdf_path}: {str(e)}")
             return None
