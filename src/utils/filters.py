@@ -20,7 +20,8 @@ RELEVANT_KEYWORDS = [
     'olympics', 'world cup', 'cricket', 'hockey', 'football',
     'agriculture', 'farmer', 'crop', 'irrigation', 'rural',
     'msme', 'manufacturing', 'services', 'digital', 'ai', 'cyber',
-    'education', 'healthcare', 'vaccination', 'pandemic'
+    'education', 'healthcare', 'vaccination', 'pandemic',
+    'physics', 'chemistry', 'biology', 'botany', 'zoology', 'mathematics', 'algebra',
 ]
 
 # Categories for classification
@@ -46,7 +47,11 @@ CATEGORIES = {
     'Trade': ['trade', 'export', 'import', 'commerce', 'fta', 'tariff'],
     'Polity': ['constitution', 'parliament', 'lok sabha', 'rajya sabha', 'bill', 'act'],
     'History': ['history', 'historical', 'freedom struggle', 'heritage', 'ancient', 'medieval'],
-    'Geography': ['geography', 'geological', 'mountain', 'river', 'climate', 'monsoon']
+    'Geography': ['geography', 'geological', 'mountain', 'river', 'climate', 'monsoon'],
+    'Physics': ['physics', 'mechanics', 'kinematics', 'thermodynamics', 'electromagnetism', 'optics', 'quantum'],
+    'Chemistry': ['chemistry', 'organic', 'inorganic', 'physical chemistry', 'stoichiometry', 'mole', 'reaction', 'bond'],
+    'Mathematics': ['mathematics', 'math', 'maths', 'algebra', 'geometry', 'calculus', 'trigonometry', 'probability', 'statistics'],
+    'Biology': ['biology', 'botany', 'zoology', 'genetics', 'ecology', 'anatomy', 'physiology', 'biotech'],
 }
 
 
@@ -100,6 +105,26 @@ def classify_category(text: str, title: str = "") -> str:
         return max(category_scores.items(), key=lambda x: x[1])[0]
     
     return "Business"  # Default category
+
+
+def classify_category_strict(text: str, title: str = "") -> Optional[str]:
+    """
+    Classify content into category without a default fallback.
+
+    Returns None when no category matches to avoid silent misclassification.
+    """
+    combined_text = (title + " " + text).lower()
+
+    category_scores = {}
+    for category, keywords in CATEGORIES.items():
+        score = sum(1 for keyword in keywords if keyword in combined_text)
+        if score > 0:
+            category_scores[category] = score
+
+    if not category_scores:
+        return None
+
+    return max(category_scores.items(), key=lambda x: x[1])[0]
 
 
 def filter_by_source(source: str) -> bool:

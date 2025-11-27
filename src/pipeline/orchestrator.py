@@ -12,7 +12,7 @@ from src.database.repositories.pdf_chunk_repository import PdfChunkRepository
 from src.database.repositories.article_log_repository import ArticleLogRepository
 from src.database.db import SessionLocal
 from src.generators.question_generator import QuestionGenerator
-from src.utils.filters import is_relevant_content, classify_category
+from src.utils.filters import is_relevant_content, classify_category, classify_category_strict
 from src.utils.article_scorer import ArticleScorer
 from src.fetchers.pdf_parser import PDFParser
 from src.pipeline.pdf.chunker import PdfChunker
@@ -337,13 +337,20 @@ class PipelineOrchestrator:
                 return None
 
             if not is_relevant_content(full_text):
-                logger.info(f"PDF content not relevant for exam prep: {pdf_path}")
+                message = f"PDF content not relevant for exam prep: {pdf_path}"
+                logger.info(message)
                 if pdf_source_id:
                     self.pdf_source_repo.update_status(pdf_source_id, "failed", error_reason="not_relevant")
-                return None
+                # Fail fast so we never silently store questions for irrelevant PDFs
+                raise ValueError(message)
 
             if not category:
-                category = classify_category(full_text, os.path.basename(pdf_path))
+                category = classify_category_strict(full_text, os.path.basename(pdf_path))
+                if not category:
+                    message = f"Unable to classify PDF category for {pdf_path}; aborting to avoid mislabeling"
+                    if pdf_source_id:
+                        self.pdf_source_repo.update_status(pdf_source_id, "failed", error_reason="unclassified")
+                    raise ValueError(message)
 
             chunks = self.pdf_chunker.chunk(pages)
             if not chunks:

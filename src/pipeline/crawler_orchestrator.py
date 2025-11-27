@@ -78,6 +78,8 @@ class CrawlerOrchestrator:
                         self.stats['articles_stored'] += 1
                     except Exception as e:
                         logger.error(f"Error storing article {article_data.get('url', 'Unknown')}: {str(e)}")
+                        # Roll back the failed transaction so subsequent inserts can proceed
+                        self.db_session.rollback()
                         self.stats['articles_failed'] += 1
                         self.stats['errors'].append(str(e))
 

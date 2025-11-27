@@ -6,7 +6,7 @@ alongside the existing daily_questions table.
 """
 
 import logging
-from typing import Dict, List, Optional
+from typing import Dict, List, Optional, Tuple
 from datetime import datetime
 from sqlalchemy.orm import Session
 from sqlalchemy import text
@@ -14,39 +14,70 @@ from src.database.db import SessionLocal
 
 logger = logging.getLogger(__name__)
 
-# Category mapping from automation backend to fallback frontend categories
+# Normalize noisy/variant category labels to canonical display names
+CATEGORY_NORMALIZATION = {
+    'ca': 'Current Affairs',
+    'current affairs': 'Current Affairs',
+    'current-affairs': 'Current Affairs',
+    'gk': 'General Knowledge',
+    's&t': 'Science & Technology',
+    'science and technology': 'Science & Technology',
+    'science & technology': 'Science & Technology',
+    'math': 'Mathematics',
+    'maths': 'Mathematics',
+    'mathematics': 'Mathematics',
+    'bio': 'Biology',
+    'botany': 'Biology',
+    'zoology': 'Biology',
+    'physics': 'Physics',
+    'chemistry': 'Chemistry',
+    'biology': 'Biology',
+    'news this month': 'News This Month',
+    'news last 3 months': 'News Last 3 Months',
+}
+
+# Case-insensitive mapping from automation/backend category → frontend category
+# Keys MUST be lower-case.
 CATEGORY_MAPPING = {
-    'Business': 'Economy',
-    'Economy': 'Economy',
-    'Banking': 'Economy',
-    'Macro Economy': 'Economy',
-    'Agri Business': 'Economy',
-    'Money & Banking': 'Economy',
-    'Markets': 'Economy',
-    'Trade': 'Economy',
-    'Current Affairs': 'Current Affairs',
-    'India': 'Current Affairs',
-    'World': 'Current Affairs',
-    'Opinion': 'Current Affairs',
-    'Sports': 'Current Affairs',
-    'Explained': 'Current Affairs',
-    'International Relations': 'Current Affairs',
-    'News This Month': 'News This Month',
-    'News Last 3 Months': 'News Last 3 Months',
-    'Polity': 'India GK',
-    'History': 'History',
-    'Geography': 'India GK',
-    'Science & Technology': 'India GK',
-    'Technology': 'India GK',
-    'Environment': 'India GK',
-    'Lifestyle': 'India GK',
-    'Entertainment': 'India GK',
-    'General Knowledge': 'India GK',
-    'India GK': 'India GK',
-    'Physics': 'India GK',
-    'Chemistry': 'India GK',
-    'Mathematics': 'India GK',
-    'Biology': 'India GK',
+    'business': 'Economy',
+    'economy': 'Economy',
+    'banking': 'Economy',
+    'macro economy': 'Economy',
+    'macro-economy': 'Economy',
+    'macro': 'Economy',
+    'agri business': 'Economy',
+    'money & banking': 'Economy',
+    'markets': 'Markets',
+    'trade': 'Trade',
+    'current affairs': 'Current Affairs',
+    'india': 'India',
+    'world': 'World',
+    'opinion': 'Opinion',
+    'sports': 'Sports',
+    'explained': 'Explained',
+    'international relations': 'International Relations',
+    'general knowledge': 'General Knowledge',
+    'lifestyle': 'Lifestyle',
+    'entertainment': 'Entertainment',
+    'science & technology': 'Science & Technology',
+    'science and technology': 'Science & Technology',
+    'technology': 'Technology',
+    'environment': 'Environment',
+    'polity': 'Polity',
+    'history': 'History',
+    'geography': 'Geography',
+    'india gk': 'India GK',
+    'news this month': 'News This Month',
+    'news last 3 months': 'News Last 3 Months',
+    'physics': 'Physics',
+    'chemistry': 'Chemistry',
+    'mathematics': 'Mathematics',
+    'math': 'Mathematics',
+    'maths': 'Mathematics',
+    'biology': 'Biology',
+    'bio': 'Biology',
+    'botany': 'Biology',
+    'zoology': 'Biology',
 }
 
 
@@ -63,6 +94,41 @@ class FrontendQuestionRepository:
         self.db_session = db_session
         self._category_cache = None
         self._allowed_difficulties = {'easy', 'medium', 'hard'}
+
+    def _normalize_category_name(self, name: str) -> str:
+        """Return canonicalized category display name."""
+        cleaned = (name or "").strip()
+        if not cleaned:
+            return ""
+
+        normalized = CATEGORY_NORMALIZATION.get(cleaned.lower())
+        return normalized or cleaned
+
+    def _resolve_category_id(self, automation_category: str, categories: Dict[str, str]) -> Tuple[Optional[str], str]:
+        """
+        Resolve automation category to a frontend category UUID.
+
+        This is strict: if we cannot confidently map the category, we
+        refuse to insert instead of falling back to a default.
+        """
+        normalized_name = self._normalize_category_name(automation_category)
+        lower_key = normalized_name.lower()
+
+        # Candidate names to try in order
+        candidate_names = []
+        if normalized_name:
+            candidate_names.append(normalized_name)
+
+        mapped = CATEGORY_MAPPING.get(lower_key)
+        if mapped and mapped not in candidate_names:
+            candidate_names.append(mapped)
+
+        for candidate in candidate_names:
+            category_id = categories.get(candidate)
+            if category_id:
+                return category_id, candidate
+
+        return None, normalized_name
 
     def _get_categories(self, session: Session) -> Dict[str, str]:
         """
@@ -160,19 +226,15 @@ class FrontendQuestionRepository:
                 
                 # Map automation category to frontend category
                 automation_category = questions_data.get('category', 'Current Affairs')
-                category_name = automation_category if automation_category in categories else CATEGORY_MAPPING.get(automation_category, automation_category)
-                
-                category_id = categories.get(category_name)
-                if not category_id:
-                    fallback_category = CATEGORY_MAPPING.get(automation_category, 'Current Affairs')
-                    category_id = categories.get(fallback_category)
-                    category_name = fallback_category
-                
+                category_id, category_name = self._resolve_category_id(automation_category, categories)
+
                 if not category_id:
                     error_msg = f"Category not found: {automation_category} (fallback {category_name})"
                     logger.error(error_msg)
                     stats['errors'].append(error_msg)
-                    return stats
+                    # Fail fast so the caller can handle/report instead of silently
+                    # inserting into an incorrect category.
+                    raise ValueError(error_msg)
                 
                 source = questions_data.get('source', 'Unknown')
                 date = questions_data.get('date', datetime.now().strftime('%Y-%m-%d'))

@@ -76,6 +76,21 @@ Edit `.env` file with the following variables:
 - `OPENAI_MODEL`: Model to use (gpt-4 or gpt-3.5-turbo)
 - `LOG_LEVEL`: Logging level (INFO, DEBUG, etc.)
 
+### Remote database over SSH (optional)
+
+If the PostgreSQL server is only reachable through SSH, forward it locally and keep `DATABASE_URL` pointing at `localhost`:
+
+1) Set the tunnel variables in `.env` (see `DB_SSH_*` and `DB_REMOTE_*` in `env.example`).
+2) Start the tunnel and leave the terminal open:
+   ```bash
+   ./scripts/ssh_db_tunnel.sh
+   ```
+3) Point `DATABASE_URL` to the forwarded port (example uses local port 5442):
+   ```
+   DATABASE_URL=postgresql://improve-user:improve123@localhost:5442/improve-db
+   ```
+   Replace `5442` if you change `DB_LOCAL_PORT`. Stop the tunnel with Ctrl+C.
+
 ## Usage
 
 ### Manual Run
